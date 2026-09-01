@@ -19,17 +19,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Régi node-sass miatt Node 14 (van prebuilt binary)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
-          cache: "npm"
+          node-version: "14"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 make g++ build-essential
+          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
 
       - name: NPM install
-        run: npm install
+        run: npm install --legacy-peer-deps
+        env:
+          PYTHON: python3
 
       - name: Install Ionic CLI and Cordova
-        run: npm install -g @ionic/cli cordova
+        run: npm install -g @ionic/cli@6 cordova@10
 
       - name: Ionic Cordova build (Android release)
         run: ionic cordova build android --prod --release
@@ -97,14 +105,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
-          cache: "npm"
+          node-version: "14"
 
       - name: Install Ionic CLI and Cordova
-        run: npm install -g @ionic/cli cordova
+        run: npm install -g @ionic/cli@6 cordova@10
 
       - name: NPM install
-        run: npm install
+        run: npm install --legacy-peer-deps
+        env:
+          PYTHON: python3
 
       - name: Build release with fastlane
         run: fastlane ios build
