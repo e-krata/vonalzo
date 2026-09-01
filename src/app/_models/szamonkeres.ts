@@ -1,13 +1,12 @@
-export interface Mulasztas {
+export interface Szamonkeres {
     Uid?: string;
-    TanuloUid?: string;
+    TantargyUid?: string;
     Datum?: string;
-    Tipus?: {
+    Modja?: {
         Uid: string;
         Nev: string;
         Leiras?: string;
     };
-    KesesPercben?: number;
     OsztalyCsoportUid?: string;
     [key: string]: any;
 }

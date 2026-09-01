@@ -1,4 +1,6 @@
 export interface KretaEnum {
-    Id: number;
+    Id?: number;
+    Uid?: string;
     Nev: string;
+    Leiras?: string;
 }

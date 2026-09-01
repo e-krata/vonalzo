@@ -13,6 +13,10 @@ export * from "./institute";
 export * from "./tanitott-csoport";
 export * from "./ertekeles-tipus";
 export * from "./tanmenet";
-
 export * from "./page-state";
 export * from "./idirty";
+export * from "./osztaly-csoport";
+export * from "./tanulo";
+export * from "./ertekeles";
+export * from "./hazi-feladat";
+export * from "./szamonkeres";

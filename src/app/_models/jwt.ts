@@ -1,21 +1,11 @@
 export interface Jwt {
-    nbf: number;
-    exp: number;
-    iss: string;
-    aud: string[];
-    client_id: string;
-    sub: string;
-    auth_time: number;
-    idp: string;
+    iat?: number;
+    exp?: number;
     name: string;
-    "kreta:user_name": string;
-    "kreta:institute_code": string;
-    "kreta:institute_user_id": number;
-    "kreta:institute_user_unique_id": string;
-    "kreta:school_year_id": string;
-    "kreta:school_year_unique_id": string;
-    "kreta:user_type": string;
-    role: string[];
-    scope: string[];
-    amr: string[];
+    role: string | string[];
+    "kreta:user_name"?: string;
+    "kreta:institute_code"?: string;
+    "kreta:institute_user_id"?: string | number;
+    sub?: string;
+    [key: string]: any;
 }

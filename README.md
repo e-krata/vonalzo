@@ -1,28 +1,43 @@
 # Vonalzó+
-Egy napló **tanároknak**
 
-<sub>_Ez a projekt a Coware-Apps által készített Napló+-on alapul._</sub>
+Egy napló **tanároknak** – az [ujkreta](https://github.com/puspus-dev/ujkreta) (eKRÁTA-kompatibilis) API-ra átírva.
 
-**FONTOS!** Ez **NEM** az e-kréta naplóhoz tartozik, hanem egy általam készített ún. KRÁTA naplóhoz. A projektet itt tudod megnézni: [/ujkreta](https://github.com/puspus-dev/ujkreta)
+<sub>_Eredetileg a Coware-Apps Napló+ projektjén alapult._</sub>
 
-Mit tud?
+## API
 
-OLVASÁS (GET)
 
-Órarend - /naplo/v3/sajat/OrarendElemek
 
-Értékelések - /naplo/v3/sajat/Ertekelesek
+### Autentikáció
+- `POST /connect/token` (password + refresh_token grant)
 
-Házik - /naplo/v3/sajat/HaziFeladatok
+### Olvasás (GET)
+| Endpoint | Leírás |
+|----------|--------|
+| `/naplo/v3/sajat/TanarAdatlap` | Tanár profil |
+| `/naplo/v3/sajat/OsztalyCsoportok` | Osztályok |
+| `/naplo/v3/sajat/Tanulok` | Diákok |
+| `/naplo/v3/sajat/OrarendElemek` | Órarend |
+| `/naplo/v3/sajat/Ertekelesek` | Értékelések |
+| `/naplo/v3/sajat/HaziFeladatok` | Házi feladatok |
+| `/naplo/v3/sajat/Mulasztasok` | Mulasztások |
+| `/naplo/v3/sajat/BejelentettSzamonkeresek` | Számonkérések |
 
-Mulasztások - /naplo/v3/sajat/Mulasztasok
+### Írás (POST)
+| Endpoint | Leírás |
+|----------|--------|
+| `/naplo/v3/sajat/Ertekelesek` | Új értékelés |
+| `/naplo/v3/sajat/HaziFeladatok` | Új házi |
+| `/naplo/v3/sajat/Mulasztasok` | Új mulasztás |
+| `/naplo/v3/sajat/BejelentettSzamonkeresek` | Új számonkérés |
 
-ÍRÁS (POST)
 
-Értékelés Írás - /naplo/v3/sajat/Ertekelesek
+## Fejlesztés
 
-Házi Írás - /naplo/v3/sajat/OrarendElemek
+```bash
+npm install
+ionic serve
+```
 
-Mulasztás Írás - /naplo/v3/sajat/Mulasztasok
-
-<sub>(+ számonkérés de az most ide nem írtam)</sub>
+A régi e-KRÉTA Napló v2 API-ról (`/Naplo/v2/...`) át lett írva a modern `/naplo/v3/sajat/*` struktúrára.
+Az UI változatlan maradt, csak az API réteg lett cserélve.

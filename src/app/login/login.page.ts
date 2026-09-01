@@ -16,7 +16,6 @@ import {
     AlertController,
 } from "@ionic/angular";
 import { ErrorHelper } from "../_helpers";
-import { InstituteSelectorModalPage } from "./institute-selector-modal/institute-selector-modal.page";
 import { SafariViewController } from "@ionic-native/safari-view-controller/ngx";
 import { StatusBar } from "@ionic-native/status-bar/ngx";
 import { InAppBrowser } from "@ionic-native/in-app-browser/ngx";
@@ -34,7 +33,6 @@ import { takeUntil } from "rxjs/operators";
 export class LoginPage {
     public username: string;
     public password: string;
-    public instituteName: string;
     private returnUrl: string;
     public loading: boolean;
 
@@ -148,20 +146,6 @@ export class LoginPage {
             this.loading = false;
             this.firebase.stopTrace("login_time");
         }
-    }
-
-    async showInstituteModal() {
-        if (this.networkStatus.getCurrentNetworkStatus() === ConnectionStatus.Offline)
-            return await this.errorHelper.presentAlert(
-                this.translate.instant("login.no-internet-institute-list")
-            );
-
-        const modal = await this.modalController.create({
-            component: InstituteSelectorModalPage,
-        });
-        await modal.present();
-        const { data } = await modal.onWillDismiss();
-        if (data && data.selectedInstitute) this.instituteName = data.selectedInstitute.name;
     }
 
     openPrivacy() {

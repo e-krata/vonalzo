@@ -8,7 +8,7 @@
         android:name="androidx.test.runner.AndroidJUnitRunner"
         android:functionalTest="false"
         android:handleProfiling="false"
-        android:label="Tests for hu.coware.naplo"
-        android:targetPackage="hu.coware.naplo"/>
+        android:label="Tests for hu.ekrata.vonalzo
+        android:targetPackage="hu.ekrata.vonalzo"/>
 
 </manifest>

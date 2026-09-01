@@ -17,13 +17,13 @@ export class BearerTokenInterceptorService implements HttpInterceptor {
     constructor(private kreta: KretaService, private eugy: KretaEUgyService) {}
 
     intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
-        // do not set token on ngx-translator requests
         if (!req.url.startsWith("https")) {
             return next.handle(req);
         }
 
-        // add token to kreta mobile api requests
-        if (this.kreta.institute && req.url.startsWith(this.kreta.institute.url)) {
+        const base = this.kreta.baseUrl || "https://ujkreta.onrender.com";
+
+        if (req.url.startsWith(base) || req.url.includes("ujkreta.onrender.com")) {
             return from(this.kreta.getValidAccessToken()).pipe(
                 mergeMap(token => {
                     req = req.clone({
@@ -31,13 +31,9 @@ export class BearerTokenInterceptorService implements HttpInterceptor {
                             Authorization: `Bearer ${token}`,
                         },
                     });
-
-                    console.debug("[TOKEN INTERC] Kreta Token applied:", req);
-
+                    console.debug("[TOKEN INTERC] Kreta Token applied:", req.url);
                     return next.handle(req).pipe(
                         catchError((error: HttpErrorResponse) => {
-                            // On 401 error on the endpoint, we first try to refresh the token
-                            // and repeat the request
                             if (error.status == 401) {
                                 return from(this.kreta.getValidAccessToken(true)).pipe(
                                     mergeMap(token => {
@@ -46,17 +42,10 @@ export class BearerTokenInterceptorService implements HttpInterceptor {
                                                 Authorization: `Bearer ${token}`,
                                             },
                                         });
-
-                                        console.debug(
-                                            "[TOKEN RETRIED INTERC] Kreta Token applied:",
-                                            req
-                                        );
-
                                         return next.handle(req);
                                     })
                                 );
                             }
-
                             return throwError(error);
                         })
                     );
@@ -64,8 +53,7 @@ export class BearerTokenInterceptorService implements HttpInterceptor {
             );
         }
 
-        // add token to eugy api requests
-        if (req.url.startsWith(this.eugy.host)) {
+        if (req.url.includes("eugyintezes") || req.url.includes("e-ugy")) {
             return from(this.eugy.getValidAccessToken())
                 .pipe(
                     mergeMap(token => {
@@ -74,16 +62,11 @@ export class BearerTokenInterceptorService implements HttpInterceptor {
                                 Authorization: `Bearer ${token}`,
                             },
                         });
-
-                        console.debug("[TOKEN INTERC] Kreta EUgy Token applied:", req);
-
                         return next.handle(req);
                     })
                 )
                 .pipe(
                     catchError((error: HttpErrorResponse) => {
-                        // On 401 error on the endpoint, we first try to refresh the token
-                        // and repeat the request
                         if (error.status == 401) {
                             return from(this.eugy.getValidAccessToken(true)).pipe(
                                 mergeMap(token => {
@@ -92,23 +75,14 @@ export class BearerTokenInterceptorService implements HttpInterceptor {
                                             Authorization: `Bearer ${token}`,
                                         },
                                     });
-
-                                    console.debug(
-                                        "[TOKEN RETRIED INTERC] Kreta EUgy Token applied:",
-                                        req
-                                    );
-
                                     return next.handle(req);
                                 })
                             );
                         }
-
                         return throwError(error);
                     })
                 );
         }
-
-        console.debug("[TOKEN INTERC] Token NOT applied:", req);
 
         return next.handle(req);
     }

@@ -1,9 +1,9 @@
 {
     "config_ios": {
-        "CFBundleDisplayName": "Napló+",
-        "CFBundleName": "Napló+"
+        "CFBundleDisplayName": "Vonalzó+",
+        "CFBundleName": "Vonalzü+"
     },
     "config_android": {
-        "app_name": "Napló+"
+        "app_name": "Vonalzó+"
     }
 }
