@@ -305,7 +305,7 @@ export class KretaService {
             Tema: item.Tema || item.Szoveg || item.Nev || "",
             TantargyId: tantargy.Uid || item.TantargyUid || item.TantargyId,
             TantargyNev: tantargy.Nev || item.TantargyNev || item.Nev || "",
-            TantargyKategoria: tantargy.Kategoria?.Nev || item.TantargyKategoria || "",
+            TantargyKategoria: (tantargy.Kategoria && tantargy.Kategoria.Nev) || item.TantargyKategoria || "",
             OsztalyCsoportId: osztaly.Uid || item.OsztalyCsoportUid || item.OsztalyCsoportId,
             OsztalyCsoportNev: osztaly.Nev || item.OsztalyCsoportNev || "",
             TeremNev: item.TeremNeve || item.TeremNev || "",
@@ -421,8 +421,8 @@ export class KretaService {
                 const filtered = (tanulok || []).filter(
                     t =>
                         !osztalyCsoportId ||
-                        t.OsztalyCsoport?.Uid === String(osztalyCsoportId) ||
-                        t.OsztalyCsoport?.Uid?.includes(String(osztalyCsoportId))
+                    (t.OsztalyCsoport && t.OsztalyCsoport.Uid === String(osztalyCsoportId)) ||
+(t.OsztalyCsoport && t.OsztalyCsoport.Uid && t.OsztalyCsoport.Uid.indexOf(String(osztalyCsoportId)) !== -1)
                 );
                 return {
                     Tanulok: filtered.map(t => ({
@@ -481,7 +481,7 @@ export class KretaService {
 
                 if (ertekeles.OsztalyzatTipus) {
                     // OsztalyzatTipus.Id is 1501..1505 → mark 1..5
-                    let id = ertekeles.OsztalyzatTipus.Id ?? ertekeles.OsztalyzatTipus.Uid;
+                    let id = ertekeles.OsztalyzatTipus.Id != null ? ertekeles.OsztalyzatTipus.Id : ertekeles.OsztalyzatTipus.Uid;
                     id = typeof id === "number" ? id : parseInt(String(id), 10);
                     szamErtek = id >= 1500 ? id - 1500 : id;
                     szovegesErtek = ertekeles.OsztalyzatTipus.Nev || String(szamErtek);
