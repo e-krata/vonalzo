@@ -18,7 +18,7 @@ import {
     Ertekeles,
     HaziFeladat,
     Szamonkeres,
-    Tanulo,
+    ApiTanulo,
     OsztalyCsoport,
 } from "../_models";
 import { JwtDecodeHelper } from "../_helpers";
@@ -269,8 +269,8 @@ export class KretaService {
         return this.getAuthenticated<OsztalyCsoport[]>("/naplo/v3/sajat/OsztalyCsoportok", 60 * 60);
     }
 
-    getTanulok(): Observable<Tanulo[]> {
-        return this.getAuthenticated<Tanulo[]>("/naplo/v3/sajat/Tanulok", 60 * 60);
+    getTanulok(): Observable<ApiTanulo[]> {
+        return this.getAuthenticated<ApiTanulo[]>("/naplo/v3/sajat/Tanulok", 60 * 60);
     }
 
     getOrarendElemek(forceRefresh: boolean = false): Observable<any[]> {
@@ -384,9 +384,7 @@ export class KretaService {
             new HttpHeaders().set("Content-Type", "application/json")
         );
     }
-
     getNaploEnum(engedelyezettEnumName: string = "MulasztasTipusEnum"): Promise<KretaEnum[]> {
-        // Id values match the old official API conventions so the existing UI keeps working
         const mocks: { [key: string]: KretaEnum[] } = {
             MulasztasTipusEnum: [
                 { Id: 1, Uid: "1", Nev: "Hiányzás", Leiras: "Hiányzás" },
@@ -403,7 +401,6 @@ export class KretaService {
                 { Id: 3, Uid: "3", Nev: "Szöveges", Leiras: "Szöveges" },
             ],
             OsztalyzatTipusEnum: [
-                // old UI does: markCodes.find(x => x.Id == this.mark + 1500)
                 { Id: 1501, Uid: "1", Nev: "1", Leiras: "Elégtelen" },
                 { Id: 1502, Uid: "2", Nev: "2", Leiras: "Elégséges" },
                 { Id: 1503, Uid: "3", Nev: "3", Leiras: "Közepes" },
@@ -417,19 +414,32 @@ export class KretaService {
 
     getOsztalyTanuloi(osztalyCsoportId: any): Observable<OsztalyTanuloi> {
         return this.getTanulok().pipe(
-            map(tanulok => {
-                const filtered = (tanulok || []).filter(
-                    t =>
-                        !osztalyCsoportId ||
-                    (t.OsztalyCsoport && t.OsztalyCsoport.Uid === String(osztalyCsoportId)) ||
-(t.OsztalyCsoport && t.OsztalyCsoport.Uid && t.OsztalyCsoport.Uid.indexOf(String(osztalyCsoportId)) !== -1)
-                );
+            map((tanulok: ApiTanulo[]) => {
+                const list = tanulok || [];
+                const filtered = list.filter(function (t) {
+                    if (!osztalyCsoportId) {
+                        return true;
+                    }
+                    if (!t.OsztalyCsoport || !t.OsztalyCsoport.Uid) {
+                        return false;
+                    }
+                    const uid = String(t.OsztalyCsoport.Uid);
+                    const idStr = String(osztalyCsoportId);
+                    return uid === idStr || uid.indexOf(idStr) !== -1;
+                });
                 return {
-                    Tanulok: filtered.map(t => ({
-                        Id: t.Uid,
-                        Nev: t.Nev,
-                        ...t,
-                    })),
+                    TanuloLista: filtered.map(function (t) {
+                        return {
+                            Id: t.Uid as any,
+                            Nev: t.Nev,
+                            AnyjaNev: "",
+                            SzuletesUtc: null as any,
+                            TanugyiAdatok: {
+                                IsJogviszonySzunetelteto: false,
+                                IsSzakmaiGyakorlatonLevo: false,
+                            },
+                        };
+                    }),
                 } as any;
             })
         );
@@ -462,13 +472,7 @@ export class KretaService {
         return of({ success: false, message: "Not supported" });
     }
 
-    /**
-     * Compatibility wrapper: the old UI sends a v2-style array payload.
-     * We transform each student grade into a separate POST to the ujkreta API.
-     */
     postEvaluation(data: any): Observable<any> {
-        // data is expected to be an array like:
-        // [{ DatumUtc, Mod, Tipus, Tema, OsztalycsoportId, TantargyId, TanuloLista: [...] }]
         const items = Array.isArray(data) ? data : [data];
         const requests: Observable<any>[] = [];
 
@@ -480,8 +484,9 @@ export class KretaService {
                 let szovegesErtek: string | undefined;
 
                 if (ertekeles.OsztalyzatTipus) {
-                    // OsztalyzatTipus.Id is 1501..1505 → mark 1..5
-                    let id = ertekeles.OsztalyzatTipus.Id != null ? ertekeles.OsztalyzatTipus.Id : ertekeles.OsztalyzatTipus.Uid;
+                    let id = ertekeles.OsztalyzatTipus.Id != null
+                        ? ertekeles.OsztalyzatTipus.Id
+                        : ertekeles.OsztalyzatTipus.Uid;
                     id = typeof id === "number" ? id : parseInt(String(id), 10);
                     szamErtek = id >= 1500 ? id - 1500 : id;
                     szovegesErtek = ertekeles.OsztalyzatTipus.Nev || String(szamErtek);
@@ -512,7 +517,6 @@ export class KretaService {
             return of([]);
         }
 
-        // forkJoin is already imported via rxjs at the top of the file
         return forkJoin(requests);
     }
 
