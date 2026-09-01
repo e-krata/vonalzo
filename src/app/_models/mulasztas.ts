@@ -1,12 +1,15 @@
+import { KretaEnum } from "./kreta-enum";
+
 export interface Mulasztas {
+    // régi UI mezők
+    TanuloId?: number;
+    Tipus?: KretaEnum;
+    Keses?: number;
+
+    // ujkreta API mezők
     Uid?: string;
     TanuloUid?: string;
     Datum?: string;
-    Tipus?: {
-        Uid: string;
-        Nev: string;
-        Leiras?: string;
-    };
     KesesPercben?: number;
     OsztalyCsoportUid?: string;
     [key: string]: any;
