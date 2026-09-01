@@ -1,4 +1,5 @@
-export interface Tanulo {
+/** Diák a ujkreta API válaszából (Uid alapú). */
+export interface ApiTanulo {
     Uid: string;
     Nev: string;
     OsztalyCsoport?: {
