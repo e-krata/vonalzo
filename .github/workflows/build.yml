@@ -1,123 +1,143 @@
 name: Build and publish
 
 on:
-    push:
-        branches:
-            - master
-    pull_request:
-        branches:
-            - master
-    workflow_dispatch:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
 
 jobs:
-    android:
-        name: Build for Android
-        runs-on: ubuntu-latest
-        if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+  android:
+    name: Build for Android
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip-ci]') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: NPM install
+        run: npm install
+
+      - name: Install Ionic CLI and Cordova
+        run: npm install -g @ionic/cli cordova
+
+      - name: Ionic Cordova build (Android release)
+        run: ionic cordova build android --prod --release
+
+      - name: Get package version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: platforms/android/app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.SIGNING_ALIAS }}
+          keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vonalzo-${{ env.PACKAGE_VERSION }}-release-signed-apk
+          path: ${{ env.SIGNED_RELEASE_FILE }}
+          if-no-files-found: warn
+
+      - name: Build AAB
+        working-directory: platforms/android
+        run: ./gradlew bundleRelease
+
+      - name: Sign AAB
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: platforms/android/app/build/outputs/bundle/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.SIGNING_ALIAS }}
+          keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+
+      - name: Upload signed AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: vonalzo-${{ env.PACKAGE_VERSION }}-release-signed-aab
+          path: ${{ env.SIGNED_RELEASE_FILE }}
+          if-no-files-found: warn
+
+      - name: Upload to Play Store (internal)
+        if: github.ref == 'refs/heads/master'
+        continue-on-error: true
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.FL_PLAY_API_SECRETS }}
+          packageName: hu.coware.naplo
+          releaseFile: ${{ env.SIGNED_RELEASE_FILE }}
+          track: internal
+
+  ios:
+    name: Build for iOS
+    runs-on: macos-latest
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip-ci]') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install Ionic CLI and Cordova
+        run: npm install -g @ionic/cli cordova
+
+      - name: NPM install
+        run: npm install
+
+      - name: Build release with fastlane
+        run: fastlane ios build
         env:
-            ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+          FASTLANE_APPLE_ID: ${{ secrets.FL_APPLE_ID }}
+          FASTLANE_PASSWORD: ${{ secrets.FL_APPLE_PASSWORD }}
+          FASTLANE_TEAM_ID: ${{ secrets.FL_TEAM_ID }}
+          PILOT_APPLE_ID: ${{ secrets.FL_APPLE_APP_ID }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSPHRASE }}
+          MATCH_SECRETS_REPO_URL: ${{ secrets.MATCH_SECRETS_REPO_URL }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_SECRETS_REPO_TOKEN }}
 
-        steps:
-            - uses: actions/checkout@v1
-            - uses: actions/setup-node@v1.4.4
+      - name: Get package version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
 
-            - name: NPM install
-              run: npm install
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vonalzo-${{ env.PACKAGE_VERSION }}-release-signed-ipa
+          path: platforms/ios/build/device/NaploPlusz.ipa
+          if-no-files-found: warn
 
-            - name: Install @ionic/cli and cordova
-              run: sudo npm install -g @ionic/cli cordova
-
-            - name: Ionic build
-              run: ionic cordova build android --prod --release
-
-            - name: Get package version
-              run: |
-                  v=`node -p "const p = require('./package.json'); p.version;"`
-                  echo ::set-env name=PACKAGE_VERSION::$v
-
-            - uses: r0adkll/sign-android-release@v1
-              with:
-                  releaseDirectory: platforms/android/app/build/outputs/apk/release
-                  signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-                  alias: ${{ secrets.SIGNING_ALIAS }}
-                  keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-                  keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-
-            - name: Upload APK artifact
-              uses: actions/upload-artifact@v4
-              with:
-                  name: naplo-${{ env.PACKAGE_VERSION }}-release-signed.apk
-                  path: ${{ env.SIGNED_RELEASE_FILE }}
-
-            - name: Build AAB
-              uses: eskatos/gradle-command-action@v1
-              with:
-                  wrapper-directory: platforms/android
-                  gradle-executable: platforms/android/gradlew
-                  build-root-directory: platforms/android
-                  arguments: bundle
-
-            - uses: r0adkll/sign-android-release@v1
-              with:
-                  releaseDirectory: platforms/android/app/build/outputs/bundle/release
-                  signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-                  alias: ${{ secrets.SIGNING_ALIAS }}
-                  keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-                  keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-
-            - name: Upload AAB artifact
-              uses: actions/upload-artifact@v1.0.0
-              with:
-                  name: naplo-${{ env.PACKAGE_VERSION }}-release-signed.aab
-                  path: ${{ env.SIGNED_RELEASE_FILE }}
-
-            - if: github.ref == 'refs/heads/master'
-              name: Upload to Play Store
-              uses: r0adkll/upload-google-play@v1
-              with:
-                  serviceAccountJsonPlainText: ${{ secrets.FL_PLAY_API_SECRETS }}
-                  packageName: hu.ekrata.vonalzo
-                  releaseFile: ${{ env.SIGNED_RELEASE_FILE }}
-                  track: internal
-
-    ios:
-        name: Build for iOS
-        runs-on: macos-latest
-        if: "!contains(github.event.head_commit.message, '[skip-ci]')"
+      - name: Upload to TestFlight
+        if: github.ref == 'refs/heads/master'
+        continue-on-error: true
+        run: fastlane ios upload_to_tf
         env:
-            FASTLANE_APPLE_ID: ${{ secrets.FL_APPLE_ID }}
-            FASTLANE_PASSWORD: ${{ secrets.FL_APPLE_PASSWORD }}
-            FASTLANE_TEAM_ID: ${{ secrets.FL_TEAM_ID }}
-            PILOT_APPLE_ID: ${{ secrets.FL_APPLE_APP_ID }}
-            MATCH_PASSWORD: ${{ secrets.MATCH_PASSPHRASE }}
-            MATCH_SECRETS_REPO_URL: ${{ secrets.MATCH_SECRETS_REPO_URL }}
-            MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_SECRETS_REPO_TOKEN }}
-            ACTIONS_ALLOW_UNSECURE_COMMANDS: true
-
-        steps:
-            - uses: actions/checkout@v1
-            - uses: actions/setup-node@v1.4.4
-
-            - name: Install @ionic/cli and Cordova
-              run: sudo npm install -g @ionic/cli cordova
-
-            - name: npm install
-              run: npm install
-
-            - name: Build release with fastlane
-              run: fastlane ios build
-
-            - name: Get package version
-              run: |
-                  v=`node -p "const p = require('./package.json'); p.version;"`
-                  echo ::set-env name=PACKAGE_VERSION::$v
-
-            - name: Upload IPA artifact
-              uses: actions/upload-artifact@v1.0.0
-              with:
-                  name: naplo-${{ env.PACKAGE_VERSION }}-release-signed.ipa
-                  path: platforms/ios/build/device/NaploPlusz.ipa
-
-            - if: github.ref == 'refs/heads/master'
-              name: Upload to Testflight
-              run: fastlane ios upload_to_tf
+          FASTLANE_APPLE_ID: ${{ secrets.FL_APPLE_ID }}
+          FASTLANE_PASSWORD: ${{ secrets.FL_APPLE_PASSWORD }}
+          FASTLANE_TEAM_ID: ${{ secrets.FL_TEAM_ID }}
+          PILOT_APPLE_ID: ${{ secrets.FL_APPLE_APP_ID }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSPHRASE }}
+          MATCH_SECRETS_REPO_URL: ${{ secrets.MATCH_SECRETS_REPO_URL }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_SECRETS_REPO_TOKEN }}
