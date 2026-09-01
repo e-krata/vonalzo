@@ -44,7 +44,7 @@ jobs:
                   keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
 
             - name: Upload APK artifact
-              uses: actions/upload-artifact@v1.0.0
+              uses: actions/upload-artifact@v4
               with:
                   name: naplo-${{ env.PACKAGE_VERSION }}-release-signed.apk
                   path: ${{ env.SIGNED_RELEASE_FILE }}
