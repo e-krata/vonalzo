@@ -1,3 +1,15 @@
+ name: Build and publish
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
   android:
     name: Build for Android
     runs-on: ubuntu-latest
@@ -34,3 +46,24 @@
 
       - name: Ionic Cordova build (Android release)
         run: ionic cordova build android --prod --release
+
+      - name: Get package version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: platforms/android/app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.SIGNING_ALIAS }}
+          keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vonalzo-${{ env.PACKAGE_VERSION }}-release-signed-apk
+          path: ${{ env.SIGNED_RELEASE_FILE }}
+          if-no-files-found: warn
