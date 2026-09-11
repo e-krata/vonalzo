@@ -29,7 +29,7 @@ jobs:
           distribution: "temurin"
           java-version: "8"
 
-      - name: Install Gradle 6.9 (cordova-android 8 kompatibilis)
+      - name: Install Gradle 6.9
         run: |
           curl -fsSL -o /tmp/gradle-6.9.4-bin.zip https://services.gradle.org/distributions/gradle-6.9.4-bin.zip
           sudo unzip -q /tmp/gradle-6.9.4-bin.zip -d /opt
@@ -49,13 +49,22 @@ jobs:
       - name: Install Ionic CLI and Cordova
         run: npm install -g @ionic/cli@6 cordova@10
 
-      - name: Ionic Cordova build (Android release)
+      - name: Ionic prepare (android)
+        run: ionic cordova prepare android --prod
+
+      - name: Remove deprecated Fabric dependency
         run: |
-          java -version
-          gradle -version
-          ionic cordova build android --prod --release
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME }}
+          set -e
+          find platforms/android -name "*.gradle" -type f | while read -r f; do
+            sed -i '/io\.fabric\.tools/d' "$f" || true
+            sed -i '/maven\.fabric\.io/d' "$f" || true
+            sed -i "/apply plugin:.*['\"]io\.fabric['\"]/d" "$f" || true
+            sed -i "/apply plugin:.*fabric/d" "$f" || true
+          done
+          grep -R "fabric" platforms/android --include="*.gradle" || echo "No fabric left."
+
+      - name: Cordova build android release
+        run: ionic cordova build android --prod --release
 
       - name: Get package version
         run: |
