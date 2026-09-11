@@ -29,6 +29,12 @@ jobs:
           distribution: "temurin"
           java-version: "8"
 
+      - name: Install Gradle 6.9 (cordova-android 8 kompatibilis)
+        run: |
+          curl -fsSL -o /tmp/gradle-6.9.4-bin.zip https://services.gradle.org/distributions/gradle-6.9.4-bin.zip
+          sudo unzip -q /tmp/gradle-6.9.4-bin.zip -d /opt
+          echo "/opt/gradle-6.9.4/bin" >> "$GITHUB_PATH"
+
       - name: Install build tools
         run: |
           sudo apt-get update
@@ -44,7 +50,12 @@ jobs:
         run: npm install -g @ionic/cli@6 cordova@10
 
       - name: Ionic Cordova build (Android release)
-        run: ionic cordova build android --prod --release
+        run: |
+          java -version
+          gradle -version
+          ionic cordova build android --prod --release
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME }}
 
       - name: Get package version
         run: |
