@@ -49,35 +49,50 @@ jobs:
       - name: Install Ionic CLI and Cordova
         run: npm install -g @ionic/cli@6 cordova@10
 
-      - name: Add Android platform
-        run: |
-          npx cordova platform remove android || true
-          npx cordova platform add android@8.1.0
-
-      - name: Ionic build (web assets)
-        run: ionic build --prod
-
-      - name: Cordova prepare android
-        run: npx cordova prepare android
-
-      - name: Remove deprecated Fabric dependency
+      - name: Add Android platform + build
+        env:
+          CI: "true"
         run: |
           set -e
+
+          # 1) Platform telepítés (Ionic, nem bare cordova)
+          ionic cordova platform remove android --confirm --no-interactive || true
+          ionic cordova platform add android@8.1.0 --confirm --no-interactive
+
+          # 2) Angular / web build
+          ionic build --prod
+
+          # 3) Cordova prepare (plugin-ek + gradle fájlok)
+          ionic cordova prepare android --no-interactive || npx cordova prepare android
+
+          # 4) Régi Fabric dependency kiszedése (maven.fabric.io 403)
           find platforms/android -name "*.gradle" -type f | while read -r f; do
             sed -i '/io\.fabric\.tools/d' "$f" || true
             sed -i '/maven\.fabric\.io/d' "$f" || true
             sed -i "/apply plugin:.*['\"]io\.fabric['\"]/d" "$f" || true
             sed -i "/apply plugin:.*fabric/d" "$f" || true
           done
+          echo "--- fabric grep ---"
           grep -R "fabric" platforms/android --include="*.gradle" || echo "No fabric left."
 
-      - name: Cordova build android release
-        run: npx cordova build android --release
+          # 5) Natív release build közvetlenül Gradle-lel
+          #    (elkerüli, hogy a cordova build újra prepare-eljen és visszatolja a Fabric-et)
+          cd platforms/android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
 
       - name: Get package version
         run: |
           v=$(node -p "require('./package.json').version")
           echo "PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Find APK
+        id: apk
+        run: |
+          APK=$(find platforms/android -name "*.apk" -path "*/release/*" | head -n 1)
+          echo "Found: $APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          ls -la platforms/android/app/build/outputs/apk/release/ || true
 
       - name: Sign APK
         uses: r0adkll/sign-android-release@v1
