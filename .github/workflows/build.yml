@@ -46,37 +46,43 @@ jobs:
         env:
           PYTHON: python3
 
-      - name: Install Ionic CLI and Cordova
-        run: npm install -g @ionic/cli@6 cordova@10
+      - name: Install Ionic CLI and Cordova 9
+        run: npm install -g @ionic/cli@6 cordova@9.0.0
 
-      - name: Add Android platform + build
+      - name: Build Android APK
         env:
           CI: "true"
         run: |
           set -e
 
-          # 1) Platform telepítés (Ionic, nem bare cordova)
+          # 1) Platform
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
 
-          # 2) Angular / web build
-          ionic build --prod
-
-          # 3) Cordova prepare (plugin-ek + gradle fájlok)
-          ionic cordova prepare android --no-interactive || npx cordova prepare android
-
-          # 4) Régi Fabric dependency kiszedése (maven.fabric.io 403)
+          # 2) Fabric kiszedése (maven.fabric.io 403)
           find platforms/android -name "*.gradle" -type f | while read -r f; do
             sed -i '/io\.fabric\.tools/d' "$f" || true
             sed -i '/maven\.fabric\.io/d' "$f" || true
             sed -i "/apply plugin:.*['\"]io\.fabric['\"]/d" "$f" || true
             sed -i "/apply plugin:.*fabric/d" "$f" || true
           done
-          echo "--- fabric grep ---"
-          grep -R "fabric" platforms/android --include="*.gradle" || echo "No fabric left."
 
-          # 5) Natív release build közvetlenül Gradle-lel
-          #    (elkerüli, hogy a cordova build újra prepare-eljen és visszatolja a Fabric-et)
+          # 3) Web build
+          ionic build --prod
+
+          # 4) www bemásolása a platformba (prepare helyett – Api.js hiba elkerülése)
+          ANDROID_WWW="platforms/android/app/src/main/assets/www"
+          mkdir -p "$ANDROID_WWW"
+          rm -rf "${ANDROID_WWW:?}/"*
+          cp -a www/. "$ANDROID_WWW/"
+
+          # config.xml is, ha kell
+          if [ -f config.xml ]; then
+            cp -f config.xml platforms/android/app/src/main/res/xml/config.xml 2>/dev/null || true
+            cp -f config.xml platforms/android/res/xml/config.xml 2>/dev/null || true
+          fi
+
+          # 5) Release APK Gradle-lel
           cd platforms/android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
@@ -86,12 +92,9 @@ jobs:
           v=$(node -p "require('./package.json').version")
           echo "PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
 
-      - name: Find APK
-        id: apk
+      - name: List APK output
         run: |
-          APK=$(find platforms/android -name "*.apk" -path "*/release/*" | head -n 1)
-          echo "Found: $APK"
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          find platforms/android -name "*.apk" | head -20
           ls -la platforms/android/app/build/outputs/apk/release/ || true
 
       - name: Sign APK
