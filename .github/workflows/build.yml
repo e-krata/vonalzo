@@ -49,8 +49,16 @@ jobs:
       - name: Install Ionic CLI and Cordova
         run: npm install -g @ionic/cli@6 cordova@10
 
-      - name: Ionic prepare (android)
-        run: ionic cordova prepare android --prod
+      - name: Add Android platform
+        run: |
+          npx cordova platform remove android || true
+          npx cordova platform add android@8.1.0
+
+      - name: Ionic build (web assets)
+        run: ionic build --prod
+
+      - name: Cordova prepare android
+        run: npx cordova prepare android
 
       - name: Remove deprecated Fabric dependency
         run: |
@@ -64,7 +72,7 @@ jobs:
           grep -R "fabric" platforms/android --include="*.gradle" || echo "No fabric left."
 
       - name: Cordova build android release
-        run: ionic cordova build android --prod --release
+        run: npx cordova build android --release
 
       - name: Get package version
         run: |
