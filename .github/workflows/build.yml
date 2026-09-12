@@ -1,55 +1,4 @@
-name: Build and publish
-
-on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
-  workflow_dispatch:
-
-jobs:
-  android:
-    name: Build for Android
-    runs-on: ubuntu-latest
-    if: ${{ !contains(github.event.head_commit.message || '', '[skip-ci]') }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "14"
-
-      - name: Setup JDK 8
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "8"
-
-      - name: Install Gradle 6.9
-        run: |
-          curl -fsSL -o /tmp/gradle-6.9.4-bin.zip https://services.gradle.org/distributions/gradle-6.9.4-bin.zip
-          sudo unzip -q /tmp/gradle-6.9.4-bin.zip -d /opt
-          echo "/opt/gradle-6.9.4/bin" >> "$GITHUB_PATH"
-
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 make g++ build-essential
-          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
-
-      - name: NPM install
-        run: npm install --legacy-peer-deps
-        env:
-          PYTHON: python3
-
-      - name: Install Ionic CLI and Cordova 9
-        run: npm install -g @ionic/cli@6 cordova@9.0.0
-
-      - name: Build Android APK
+- name: Build Android APK
         env:
           CI: "true"
         run: |
@@ -59,56 +8,34 @@ jobs:
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
 
-          # 2) Fabric kiszedése (maven.fabric.io 403)
+          # 2) Fabric kiszedése
           find platforms/android -name "*.gradle" -type f | while read -r f; do
             sed -i '/io\.fabric\.tools/d' "$f" || true
             sed -i '/maven\.fabric\.io/d' "$f" || true
-            sed -i "/apply plugin:.*['\"]io\.fabric['\"]/d" "$f" || true
+            sed -i "/apply plugin:.*['\"]io\.fabric['\"]/d' "$f" || true
             sed -i "/apply plugin:.*fabric/d" "$f" || true
           done
 
           # 3) Web build
           ionic build --prod
 
-          # 4) www bemásolása a platformba (prepare helyett – Api.js hiba elkerülése)
+          # 4) www bemásolása
           ANDROID_WWW="platforms/android/app/src/main/assets/www"
           mkdir -p "$ANDROID_WWW"
           rm -rf "${ANDROID_WWW:?}/"*
           cp -a www/. "$ANDROID_WWW/"
 
-          # config.xml is, ha kell
           if [ -f config.xml ]; then
             cp -f config.xml platforms/android/app/src/main/res/xml/config.xml 2>/dev/null || true
             cp -f config.xml platforms/android/res/xml/config.xml 2>/dev/null || true
           fi
 
-          # 5) Release APK Gradle-lel
+          # 5) Gradle wrapper + release build
           cd platforms/android
+          ls -la
+          if [ ! -f "./gradlew" ]; then
+            echo "gradlew missing – generating wrapper (Gradle 4.10.3 for cordova-android 8)"
+            gradle wrapper --gradle-version 4.10.3
+          fi
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
-
-      - name: Get package version
-        run: |
-          v=$(node -p "require('./package.json').version")
-          echo "PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
-
-      - name: List APK output
-        run: |
-          find platforms/android -name "*.apk" | head -20
-          ls -la platforms/android/app/build/outputs/apk/release/ || true
-
-      - name: Sign APK
-        uses: r0adkll/sign-android-release@v1
-        with:
-          releaseDirectory: platforms/android/app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-          alias: ${{ secrets.SIGNING_ALIAS }}
-          keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-
-      - name: Upload signed APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: vonalzo-${{ env.PACKAGE_VERSION }}-release-signed-apk
-          path: ${{ env.SIGNED_RELEASE_FILE }}
-          if-no-files-found: warn
