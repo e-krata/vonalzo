@@ -28,11 +28,16 @@ jobs:
           distribution: "temurin"
           java-version: "8"
 
-      - name: Install Gradle 6.9
+      - name: Install Android SDK platform 28
         run: |
-          curl -fsSL -o /tmp/gradle-6.9.4-bin.zip https://services.gradle.org/distributions/gradle-6.9.4-bin.zip
-          sudo unzip -q /tmp/gradle-6.9.4-bin.zip -d /opt
-          echo "/opt/gradle-6.9.4/bin" >> "$GITHUB_PATH"
+          echo "y" | sdkmanager --install "platforms;android-28" "build-tools;28.0.3" >/tmp/sdkmanager.log 2>&1 || true
+          tail -n 20 /tmp/sdkmanager.log || true
+
+      - name: Install Gradle 4.10.3
+        run: |
+          curl -fsSL -o /tmp/gradle-4.10.3-bin.zip https://services.gradle.org/distributions/gradle-4.10.3-bin.zip
+          sudo unzip -q /tmp/gradle-4.10.3-bin.zip -d /opt
+          echo "/opt/gradle-4.10.3/bin" >> "$GITHUB_PATH"
 
       - name: Install build tools
         run: |
@@ -55,27 +60,49 @@ jobs:
         run: |
           set -e
 
-          # FirebaseX kihagyása CI-ben (Fabric/Maven 403 + elromló gradle)
-          ionic cordova plugin remove cordova-plugin-firebasex --nosave || true
-          ionic cordova plugin remove cordova-plugin-androidx --nosave || true
-          ionic cordova plugin remove cordova-plugin-androidx-adapter --nosave || true
+          # FirebaseX / AndroidX plugin-ek kivevése config-ból is (ne települjön újra)
+          if [ -f config.xml ]; then
+            sed -i '/firebasex/d' config.xml || true
+            sed -i '/cordova-plugin-androidx/d' config.xml || true
+          fi
+          if [ -f package.json ]; then
+            python3 -c "
+          import json
+          p=json.load(open('package.json'))
+          deps=p.get('dependencies',{})
+          for k in list(deps):
+            if 'firebasex' in k or 'cordova-plugin-androidx' in k:
+              deps.pop(k, None)
+          cord=p.get('cordova',{})
+          plugs=cord.get('plugins',{})
+          for k in list(plugs):
+            if 'firebasex' in k or 'androidx' in k:
+              plugs.pop(k, None)
+          json.dump(p, open('package.json','w'), indent=2)
+          print('package.json cleaned')
+          "
+          fi
 
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
 
-          # Fabric maradványok csak a fő gradle fájlokból
-          for f in platforms/android/build.gradle platforms/android/app/build.gradle; do
-            if [ -f "$f" ]; then
-              sed -i '/io\.fabric\.tools/d' "$f" || true
-              sed -i '/maven\.fabric\.io/d' "$f" || true
-              sed -i '/apply plugin:.*fabric/d' "$f" || true
-            fi
-          done
+          # SDK 28 kényszerítése
+          if [ -f platforms/android/project.properties ]; then
+            sed -i 's/target=.*/target=android-28/' platforms/android/project.properties
+          fi
+          if [ -f platforms/android/gradle.properties ]; then
+            echo "cdvCompileSdkVersion=28" >> platforms/android/gradle.properties
+            echo "cdvBuildToolsVersion=28.0.3" >> platforms/android/gradle.properties
+          fi
 
-          # FirebaseX apply sor kivétele, ha mégis bent maradt
-          sed -i '/cordova-plugin-firebasex/d' platforms/android/app/build.gradle || true
-          sed -i '/google-services/d' platforms/android/app/build.gradle || true
-          sed -i '/google-services/d' platforms/android/build.gradle || true
+          # Fabric / google-services maradvány
+          for f in platforms/android/build.gradle platforms/android/app/build.gradle; do
+            [ -f "$f" ] || continue
+            sed -i '/io\.fabric/d' "$f" || true
+            sed -i '/maven\.fabric\.io/d' "$f" || true
+            sed -i '/google-services/d' "$f" || true
+            sed -i '/firebasex/d' "$f" || true
+          done
 
           ionic build --prod
 
@@ -91,6 +118,11 @@ jobs:
             gradle wrapper --gradle-version 4.10.3
           fi
           chmod +x ./gradlew
+
+          # Wrapper is Gradle 4.10.3 legyen
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-4.10.3-all.zip|' gradle/wrapper/gradle-wrapper.properties
+          fi
 
           if [ -f local.properties ]; then
             sed -i '/ndk.dir/d' local.properties || true
