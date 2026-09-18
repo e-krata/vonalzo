@@ -28,11 +28,18 @@ jobs:
           distribution: "temurin"
           java-version: "8"
 
-      - name: Install Android SDK platform 28
+      - name: Install Android SDK build-tools
         run: |
-          echo "y" | sdkmanager --install "platforms;android-28" "build-tools;28.0.3" "build-tools;29.0.3" >/tmp/sdkmanager.log 2>&1 || true
-          tail -n 30 /tmp/sdkmanager.log || true
-          ls /usr/local/lib/android/sdk/build-tools/ || true
+          set -e
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "SDK=$SDK"
+          yes | sdkmanager --install "platforms;android-28" "build-tools;28.0.3" "build-tools;29.0.3" || true
+          ls -la "$SDK/build-tools/" || true
+          # Ha 29.0.3 nincs, próbáljuk még egyszer
+          if [ ! -x "$SDK/build-tools/29.0.3/zipalign" ]; then
+            yes | sdkmanager --install "build-tools;29.0.3"
+          fi
+          ls -la "$SDK/build-tools/29.0.3/" || ls -la "$SDK/build-tools/28.0.3/" || true
 
       - name: Install Gradle 4.10.3
         run: |
@@ -196,19 +203,54 @@ jobs:
           find platforms/android -name "*.apk" | head -20
           ls -la platforms/android/app/build/outputs/apk/release/ || true
 
-      - name: Sign APK
-        uses: r0adkll/sign-android-release@v1
-        with:
-          releaseDirectory: platforms/android/app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-          alias: ${{ secrets.SIGNING_ALIAS }}
-          keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-          buildToolsVersion: "28.0.3"
+      - name: Sign APK (manual zipalign + apksigner)
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_ALIAS: ${{ secrets.SIGNING_ALIAS }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+
+          # build-tools: 29 ha van, különben 28
+          if [ -x "$SDK/build-tools/29.0.3/zipalign" ]; then
+            BT="$SDK/build-tools/29.0.3"
+          elif [ -x "$SDK/build-tools/28.0.3/zipalign" ]; then
+            BT="$SDK/build-tools/28.0.3"
+          else
+            echo "No zipalign found"; ls -la "$SDK/build-tools/" || true; exit 1
+          fi
+          echo "Using build-tools: $BT"
+
+          UNSIGNED=$(find platforms/android -name "*-release-unsigned.apk" -o -name "app-release-unsigned.apk" | head -n 1)
+          if [ -z "$UNSIGNED" ]; then
+            UNSIGNED=$(find platforms/android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          fi
+          echo "Unsigned APK: $UNSIGNED"
+          test -f "$UNSIGNED"
+
+          echo "$SIGNING_KEY" | base64 -d > /tmp/keystore.jks
+          ALIGNED=/tmp/app-release-aligned.apk
+          SIGNED=platforms/android/app/build/outputs/apk/release/app-release-signed.apk
+          mkdir -p "$(dirname "$SIGNED")"
+
+          "$BT/zipalign" -f -v 4 "$UNSIGNED" "$ALIGNED"
+          "$BT/apksigner" sign \
+            --ks /tmp/keystore.jks \
+            --ks-key-alias "$SIGNING_ALIAS" \
+            --ks-pass "pass:$SIGNING_STORE_PASSWORD" \
+            --key-pass "pass:$SIGNING_KEY_PASSWORD" \
+            --out "$SIGNED" \
+            "$ALIGNED"
+
+          "$BT/apksigner" verify "$SIGNED"
+          echo "SIGNED_RELEASE_FILE=$SIGNED" >> "$GITHUB_ENV"
+          ls -la "$SIGNED"
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
           name: vonalzo-${{ env.PACKAGE_VERSION }}-release-signed-apk
           path: ${{ env.SIGNED_RELEASE_FILE }}
-          if-no-files-found: warn
+          if-no-files-found: error
