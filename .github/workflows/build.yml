@@ -30,8 +30,9 @@ jobs:
 
       - name: Install Android SDK platform 28
         run: |
-          echo "y" | sdkmanager --install "platforms;android-28" "build-tools;28.0.3" >/tmp/sdkmanager.log 2>&1 || true
-          tail -n 20 /tmp/sdkmanager.log || true
+          echo "y" | sdkmanager --install "platforms;android-28" "build-tools;28.0.3" "build-tools;29.0.3" >/tmp/sdkmanager.log 2>&1 || true
+          tail -n 30 /tmp/sdkmanager.log || true
+          ls /usr/local/lib/android/sdk/build-tools/ || true
 
       - name: Install Gradle 4.10.3
         run: |
@@ -103,7 +104,6 @@ jobs:
             sed -i 's/jcenter()/mavenCentral()/g' "$f" || true
           done
 
-          # CordovaLib build.gradle TELJES csere (bintray nélkül)
           cat > platforms/android/CordovaLib/build.gradle << 'EOF'
           ext {
               apply from: 'cordova.gradle'
@@ -161,8 +161,6 @@ jobs:
               }
           }
           EOF
-
-          # heredoc behúzás levágása (YAML run blokk space-ek)
           sed -i 's/^          //' platforms/android/CordovaLib/build.gradle
 
           ionic build --prod
@@ -206,6 +204,7 @@ jobs:
           alias: ${{ secrets.SIGNING_ALIAS }}
           keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          buildToolsVersion: "28.0.3"
 
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
