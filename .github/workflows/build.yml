@@ -60,7 +60,7 @@ jobs:
         run: |
           set -e
 
-          # FirebaseX / AndroidX plugin-ek kivevése config-ból is (ne települjön újra)
+          # FirebaseX / AndroidX kivevése, ne települjön újra platform addkor
           if [ -f config.xml ]; then
             sed -i '/firebasex/d' config.xml || true
             sed -i '/cordova-plugin-androidx/d' config.xml || true
@@ -68,17 +68,16 @@ jobs:
           if [ -f package.json ]; then
             python3 -c "
           import json
-          p=json.load(open('package.json'))
-          deps=p.get('dependencies',{})
+          p = json.load(open('package.json'))
+          deps = p.get('dependencies', {})
           for k in list(deps):
             if 'firebasex' in k or 'cordova-plugin-androidx' in k:
               deps.pop(k, None)
-          cord=p.get('cordova',{})
-          plugs=cord.get('plugins',{})
+          plugs = p.get('cordova', {}).get('plugins', {})
           for k in list(plugs):
             if 'firebasex' in k or 'androidx' in k:
               plugs.pop(k, None)
-          json.dump(p, open('package.json','w'), indent=2)
+          json.dump(p, open('package.json', 'w'), indent=2)
           print('package.json cleaned')
           "
           fi
@@ -91,11 +90,13 @@ jobs:
             sed -i 's/target=.*/target=android-28/' platforms/android/project.properties
           fi
           if [ -f platforms/android/gradle.properties ]; then
-            echo "cdvCompileSdkVersion=28" >> platforms/android/gradle.properties
-            echo "cdvBuildToolsVersion=28.0.3" >> platforms/android/gradle.properties
+            sed -i 's/[0-9]cdvCompileSdkVersion=/\ncdvCompileSdkVersion=/g' platforms/android/gradle.properties || true
+            sed -i '/^cdvCompileSdkVersion=/d' platforms/android/gradle.properties || true
+            sed -i '/^cdvBuildToolsVersion=/d' platforms/android/gradle.properties || true
+            printf '\ncdvCompileSdkVersion=28\ncdvBuildToolsVersion=28.0.3\n' >> platforms/android/gradle.properties
           fi
 
-          # Fabric / google-services maradvány
+          # Fabric / google-services / firebasex maradványok
           for f in platforms/android/build.gradle platforms/android/app/build.gradle; do
             [ -f "$f" ] || continue
             sed -i '/io\.fabric/d' "$f" || true
@@ -111,6 +112,9 @@ jobs:
           rm -rf "${ANDROID_WWW:?}/"*
           cp -a www/. "$ANDROID_WWW/"
 
+          # local.properties: csak SDK, NDK nélkül
+          echo "sdk.dir=${ANDROID_HOME:-$ANDROID_SDK_ROOT}" > platforms/android/local.properties
+
           cd platforms/android
           ls -la
 
@@ -119,13 +123,8 @@ jobs:
           fi
           chmod +x ./gradlew
 
-          # Wrapper is Gradle 4.10.3 legyen
           if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
             sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-4.10.3-all.zip|' gradle/wrapper/gradle-wrapper.properties
-          fi
-
-          if [ -f local.properties ]; then
-            sed -i '/ndk.dir/d' local.properties || true
           fi
 
           ./gradlew assembleRelease --no-daemon --stacktrace
