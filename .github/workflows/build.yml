@@ -1,67 +1,42 @@
-name: Build and publish
-
-on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
-  workflow_dispatch:
-
-jobs:
-  android:
-    name: Build for Android
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "14"
-
-      - name: Setup JDK 8
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "8"
-
-      - name: Install Gradle 6.9
-        run: |
-          curl -fsSL -o /tmp/gradle-6.9.4-bin.zip https://services.gradle.org/distributions/gradle-6.9.4-bin.zip
-          sudo unzip -q /tmp/gradle-6.9.4-bin.zip -d /opt
-          echo "/opt/gradle-6.9.4/bin" >> "$GITHUB_PATH"
-
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 make g++ build-essential
-          sudo ln -sf /usr/bin/python3 /usr/bin/python || true
-
-      - name: NPM install
-        run: npm install --legacy-peer-deps
-        env:
-          PYTHON: python3
-
-      - name: Install Ionic CLI and Cordova 9
-        run: npm install -g @ionic/cli@6 cordova@9.0.0
-
       - name: Build Android APK
         env:
           CI: "true"
+          ANDROID_NDK_HOME: ""
         run: |
           set -e
 
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
 
-          find platforms/android -name "*.gradle" -type f | while read -r f; do
-            sed -i '/io\.fabric\.tools/d' "$f" || true
-            sed -i '/maven\.fabric\.io/d' "$f" || true
-            sed -i '/apply plugin:.*fabric/d' "$f" || true
-          done
+          # Fabric / üres maven repo takarítás
+          python3 << 'PY'
+          import os, re
+          root = "platforms/android"
+          for dirpath, _, files in os.walk(root):
+              for name in files:
+                  if not name.endswith(".gradle"):
+                      continue
+                  path = os.path.join(dirpath, name)
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      text = f.read()
+                  original = text
+                  # fabric classpath / apply
+                  text = re.sub(r"[^\n]*io\.fabric\.tools[^\n]*\n?", "", text)
+                  text = re.sub(r"[^\n]*maven\.fabric\.io[^\n]*\n?", "", text)
+                  text = re.sub(r"[^\n]*apply plugin:.*fabric[^\n]*\n?", "", text, flags=re.I)
+                  # üres maven { } blokkok
+                  text = re.sub(r"maven\s*\{\s*\}", "", text)
+                  # üres repositories { } ha csak whitespace maradt
+                  text = re.sub(r"repositories\s*\{\s*\}", "repositories {\n    google()\n    jcenter()\n    mavenCentral()\n}", text)
+                  if text != original:
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(text)
+                      print("patched:", path)
+          PY
+
+          # Mutasd a gyanús részt
+          sed -n '90,120p' platforms/android/app/build.gradle || true
+          sed -n '1,80p' platforms/android/build.gradle || true
 
           ionic build --prod
 
@@ -72,34 +47,16 @@ jobs:
 
           cd platforms/android
           ls -la
+
+          # Gradle 4.10.3 wrapper (cordova-android 8)
           if [ ! -f "./gradlew" ]; then
             gradle wrapper --gradle-version 4.10.3
           fi
           chmod +x ./gradlew
-          ./gradlew assembleRelease --no-daemon
 
-      - name: Get package version
-        run: |
-          v=$(node -p "require('./package.json').version")
-          echo "PACKAGE_VERSION=$v" >> "$GITHUB_ENV"
+          # NDK warning elkerülése
+          if [ -f local.properties ]; then
+            sed -i '/ndk.dir/d' local.properties || true
+          fi
 
-      - name: List APK output
-        run: |
-          find platforms/android -name "*.apk" | head -20
-          ls -la platforms/android/app/build/outputs/apk/release/ || true
-
-      - name: Sign APK
-        uses: r0adkll/sign-android-release@v1
-        with:
-          releaseDirectory: platforms/android/app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-          alias: ${{ secrets.SIGNING_ALIAS }}
-          keyStorePassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
-
-      - name: Upload signed APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: vonalzo-${{ env.PACKAGE_VERSION }}-release-signed-apk
-          path: ${{ env.SIGNED_RELEASE_FILE }}
-          if-no-files-found: warn
+          ./gradlew assembleRelease --no-daemon --stacktrace
