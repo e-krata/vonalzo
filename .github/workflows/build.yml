@@ -28,18 +28,23 @@ jobs:
           distribution: "temurin"
           java-version: "8"
 
-      - name: Install Android SDK build-tools
+      - name: Setup Android SDK tools
         run: |
           set -e
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           echo "SDK=$SDK"
-          yes | sdkmanager --install "platforms;android-28" "build-tools;28.0.3" "build-tools;29.0.3" || true
-          ls -la "$SDK/build-tools/" || true
-          # Ha 29.0.3 nincs, próbáljuk még egyszer
-          if [ ! -x "$SDK/build-tools/29.0.3/zipalign" ]; then
-            yes | sdkmanager --install "build-tools;29.0.3"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+
+          # sdkmanager megkeresése
+          SM=$(find "$SDK" -type f -name sdkmanager 2>/dev/null | head -n 1 || true)
+          echo "sdkmanager=$SM"
+          if [ -n "$SM" ]; then
+            yes | "$SM" --install "platforms;android-28" "build-tools;28.0.3" "build-tools;29.0.3" || true
+          else
+            echo "sdkmanager not found – using preinstalled build-tools"
           fi
-          ls -la "$SDK/build-tools/29.0.3/" || ls -la "$SDK/build-tools/28.0.3/" || true
+          ls -la "$SDK/build-tools/" || true
 
       - name: Install Gradle 4.10.3
         run: |
@@ -47,7 +52,7 @@ jobs:
           sudo unzip -q /tmp/gradle-4.10.3-bin.zip -d /opt
           echo "/opt/gradle-4.10.3/bin" >> "$GITHUB_PATH"
 
-      - name: Install build tools
+      - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 make g++ build-essential
@@ -203,7 +208,7 @@ jobs:
           find platforms/android -name "*.apk" | head -20
           ls -la platforms/android/app/build/outputs/apk/release/ || true
 
-      - name: Sign APK (manual zipalign + apksigner)
+      - name: Sign APK
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           SIGNING_ALIAS: ${{ secrets.SIGNING_ALIAS }}
@@ -213,17 +218,22 @@ jobs:
           set -e
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
 
-          # build-tools: 29 ha van, különben 28
-          if [ -x "$SDK/build-tools/29.0.3/zipalign" ]; then
-            BT="$SDK/build-tools/29.0.3"
-          elif [ -x "$SDK/build-tools/28.0.3/zipalign" ]; then
-            BT="$SDK/build-tools/28.0.3"
-          else
-            echo "No zipalign found"; ls -la "$SDK/build-tools/" || true; exit 1
+          # Bármely elérhető build-tools (29 > 28 > 34+)
+          BT=""
+          for v in 29.0.3 28.0.3 34.0.0 35.0.0 35.0.1 36.0.0 36.1.0 37.0.0; do
+            if [ -x "$SDK/build-tools/$v/zipalign" ]; then
+              BT="$SDK/build-tools/$v"
+              break
+            fi
+          done
+          if [ -z "$BT" ]; then
+            BT=$(find "$SDK/build-tools" -type f -name zipalign 2>/dev/null | head -n 1 | xargs dirname)
           fi
           echo "Using build-tools: $BT"
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
 
-          UNSIGNED=$(find platforms/android -name "*-release-unsigned.apk" -o -name "app-release-unsigned.apk" | head -n 1)
+          UNSIGNED=$(find platforms/android -name "*-release-unsigned.apk" | head -n 1)
           if [ -z "$UNSIGNED" ]; then
             UNSIGNED=$(find platforms/android/app/build/outputs/apk -name "*.apk" | head -n 1)
           fi
