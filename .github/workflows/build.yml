@@ -60,7 +60,6 @@ jobs:
         run: |
           set -e
 
-          # FirebaseX / AndroidX kivevése, ne települjön újra
           if [ -f config.xml ]; then
             sed -i '/firebasex/d' config.xml || true
             sed -i '/cordova-plugin-androidx/d' config.xml || true
@@ -85,7 +84,6 @@ jobs:
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
 
-          # SDK 28
           if [ -f platforms/android/project.properties ]; then
             sed -i 's/target=.*/target=android-28/' platforms/android/project.properties
           fi
@@ -96,7 +94,6 @@ jobs:
             printf '\ncdvCompileSdkVersion=28\ncdvBuildToolsVersion=28.0.3\n' >> platforms/android/gradle.properties
           fi
 
-          # Fő gradle fájlok: fabric / firebasex / jcenter
           for f in platforms/android/build.gradle platforms/android/app/build.gradle; do
             [ -f "$f" ] || continue
             sed -i '/io\.fabric/d' "$f" || true
@@ -106,28 +103,67 @@ jobs:
             sed -i 's/jcenter()/mavenCentral()/g' "$f" || true
           done
 
-          # CordovaLib: bintray / jcenter biztonságos tisztítás (ne törjön syntax-t)
-          python3 << 'PY'
-          from pathlib import Path
-          p = Path("platforms/android/CordovaLib/build.gradle")
-          if not p.exists():
-              raise SystemExit(0)
-          t = p.read_text()
-          lines = []
-          for line in t.splitlines(True):
-              low = line.lower()
-              if "bintray" in low or "jfrog" in low:
-                  continue
-              line = line.replace("jcenter()", "mavenCentral()")
-              lines.append(line)
-          t2 = "".join(lines)
-          t2 = t2.replace("apply plugin: 'com.jfrog.bintray'", "")
-          t2 = t2.replace('apply plugin: "com.jfrog.bintray"', "")
-          p.write_text(t2)
-          print("CordovaLib/build.gradle cleaned")
-          if t2.count("{") != t2.count("}"):
-              print("WARNING brace mismatch", t2.count("{"), t2.count("}"))
-          PY
+          # CordovaLib build.gradle TELJES csere (bintray nélkül)
+          cat > platforms/android/CordovaLib/build.gradle << 'EOF'
+          ext {
+              apply from: 'cordova.gradle'
+              cdvCompileSdkVersion = privateHelpers.getProjectTarget()
+              cdvBuildToolsVersion = privateHelpers.findLatestInstalledBuildTools()
+          }
+
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:3.3.0'
+              }
+          }
+
+          repositories {
+              google()
+              mavenCentral()
+          }
+
+          apply plugin: 'com.android.library'
+
+          android {
+              compileSdkVersion cdvCompileSdkVersion
+              buildToolsVersion cdvBuildToolsVersion
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+
+              defaultConfig {
+                  minSdkVersion 19
+              }
+
+              sourceSets {
+                  main {
+                      manifest.srcFile 'AndroidManifest.xml'
+                      java.srcDirs = ['src']
+                      resources.srcDirs = ['src']
+                      aidl.srcDirs = ['src']
+                      renderscript.srcDirs = ['src']
+                      res.srcDirs = ['res']
+                      assets.srcDirs = ['assets']
+                  }
+              }
+
+              packagingOptions {
+                  exclude 'META-INF/LICENSE'
+                  exclude 'META-INF/LICENSE.txt'
+                  exclude 'META-INF/DEPENDENCIES'
+                  exclude 'META-INF/NOTICE'
+              }
+          }
+          EOF
+
+          # heredoc behúzás levágása (YAML run blokk space-ek)
+          sed -i 's/^          //' platforms/android/CordovaLib/build.gradle
 
           ionic build --prod
 
