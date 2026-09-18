@@ -54,44 +54,48 @@ jobs:
           ANDROID_NDK_HOME: ""
         run: |
           set -e
+
+          # FirebaseX kihagyása CI-ben (Fabric/Maven 403 + elromló gradle)
+          ionic cordova plugin remove cordova-plugin-firebasex --nosave || true
+          ionic cordova plugin remove cordova-plugin-androidx --nosave || true
+          ionic cordova plugin remove cordova-plugin-androidx-adapter --nosave || true
+
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
-          python3 -c "
-          import os, re
-          root = 'platforms/android'
-          for dirpath, _, files in os.walk(root):
-            for name in files:
-              if not name.endswith('.gradle'):
-                continue
-              path = os.path.join(dirpath, name)
-              with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                text = f.read()
-              original = text
-              text = re.sub(r'[^\n]*io\.fabric\.tools[^\n]*\n?', '', text)
-              text = re.sub(r'[^\n]*maven\.fabric\.io[^\n]*\n?', '', text)
-              text = re.sub(r'[^\n]*apply plugin:.*fabric[^\n]*\n?', '', text, flags=re.I)
-              text = re.sub(r'maven\s*\{\s*\}', '', text)
-              text = re.sub(r'repositories\s*\{\s*\}', 'repositories { google(); jcenter(); mavenCentral() }', text)
-              if text != original:
-                with open(path, 'w', encoding='utf-8') as f:
-                  f.write(text)
-                print('patched:', path)
-          "
-          sed -n '90,120p' platforms/android/app/build.gradle || true
+
+          # Fabric maradványok csak a fő gradle fájlokból
+          for f in platforms/android/build.gradle platforms/android/app/build.gradle; do
+            if [ -f "$f" ]; then
+              sed -i '/io\.fabric\.tools/d' "$f" || true
+              sed -i '/maven\.fabric\.io/d' "$f" || true
+              sed -i '/apply plugin:.*fabric/d' "$f" || true
+            fi
+          done
+
+          # FirebaseX apply sor kivétele, ha mégis bent maradt
+          sed -i '/cordova-plugin-firebasex/d' platforms/android/app/build.gradle || true
+          sed -i '/google-services/d' platforms/android/app/build.gradle || true
+          sed -i '/google-services/d' platforms/android/build.gradle || true
+
           ionic build --prod
-          ANDROID_WWW='platforms/android/app/src/main/assets/www'
-          mkdir -p "\$ANDROID_WWW"
-          rm -rf "\${ANDROID_WWW:?}/"*
-          cp -a www/. "\$ANDROID_WWW/"
+
+          ANDROID_WWW="platforms/android/app/src/main/assets/www"
+          mkdir -p "$ANDROID_WWW"
+          rm -rf "${ANDROID_WWW:?}/"*
+          cp -a www/. "$ANDROID_WWW/"
+
           cd platforms/android
           ls -la
+
           if [ ! -f ./gradlew ]; then
             gradle wrapper --gradle-version 4.10.3
           fi
           chmod +x ./gradlew
+
           if [ -f local.properties ]; then
             sed -i '/ndk.dir/d' local.properties || true
           fi
+
           ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Get package version
