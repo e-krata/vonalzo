@@ -60,6 +60,7 @@ jobs:
         run: |
           set -e
 
+          # FirebaseX / AndroidX kivevése, ne települjön újra
           if [ -f config.xml ]; then
             sed -i '/firebasex/d' config.xml || true
             sed -i '/cordova-plugin-androidx/d' config.xml || true
@@ -84,6 +85,7 @@ jobs:
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
 
+          # SDK 28
           if [ -f platforms/android/project.properties ]; then
             sed -i 's/target=.*/target=android-28/' platforms/android/project.properties
           fi
@@ -94,16 +96,38 @@ jobs:
             printf '\ncdvCompileSdkVersion=28\ncdvBuildToolsVersion=28.0.3\n' >> platforms/android/gradle.properties
           fi
 
-          # Minden .gradle: fabric / bintray / jcenter javítás
-          find platforms/android -name "*.gradle" -type f | while read -r f; do
+          # Fő gradle fájlok: fabric / firebasex / jcenter
+          for f in platforms/android/build.gradle platforms/android/app/build.gradle; do
+            [ -f "$f" ] || continue
             sed -i '/io\.fabric/d' "$f" || true
             sed -i '/maven\.fabric\.io/d' "$f" || true
             sed -i '/google-services/d' "$f" || true
             sed -i '/firebasex/d' "$f" || true
-            sed -i '/bintray/d' "$f" || true
-            sed -i '/com\.jfrog\.bintray/d' "$f" || true
             sed -i 's/jcenter()/mavenCentral()/g' "$f" || true
           done
+
+          # CordovaLib: bintray / jcenter biztonságos tisztítás (ne törjön syntax-t)
+          python3 << 'PY'
+          from pathlib import Path
+          p = Path("platforms/android/CordovaLib/build.gradle")
+          if not p.exists():
+              raise SystemExit(0)
+          t = p.read_text()
+          lines = []
+          for line in t.splitlines(True):
+              low = line.lower()
+              if "bintray" in low or "jfrog" in low:
+                  continue
+              line = line.replace("jcenter()", "mavenCentral()")
+              lines.append(line)
+          t2 = "".join(lines)
+          t2 = t2.replace("apply plugin: 'com.jfrog.bintray'", "")
+          t2 = t2.replace('apply plugin: "com.jfrog.bintray"', "")
+          p.write_text(t2)
+          print("CordovaLib/build.gradle cleaned")
+          if t2.count("{") != t2.count("}"):
+              print("WARNING brace mismatch", t2.count("{"), t2.count("}"))
+          PY
 
           ionic build --prod
 
