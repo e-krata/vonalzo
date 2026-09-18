@@ -60,7 +60,6 @@ jobs:
         run: |
           set -e
 
-          # FirebaseX / AndroidX kivevése, ne települjön újra platform addkor
           if [ -f config.xml ]; then
             sed -i '/firebasex/d' config.xml || true
             sed -i '/cordova-plugin-androidx/d' config.xml || true
@@ -85,7 +84,6 @@ jobs:
           ionic cordova platform remove android --confirm --no-interactive || true
           ionic cordova platform add android@8.1.0 --confirm --no-interactive
 
-          # SDK 28 kényszerítése
           if [ -f platforms/android/project.properties ]; then
             sed -i 's/target=.*/target=android-28/' platforms/android/project.properties
           fi
@@ -96,13 +94,15 @@ jobs:
             printf '\ncdvCompileSdkVersion=28\ncdvBuildToolsVersion=28.0.3\n' >> platforms/android/gradle.properties
           fi
 
-          # Fabric / google-services / firebasex maradványok
-          for f in platforms/android/build.gradle platforms/android/app/build.gradle; do
-            [ -f "$f" ] || continue
+          # Minden .gradle: fabric / bintray / jcenter javítás
+          find platforms/android -name "*.gradle" -type f | while read -r f; do
             sed -i '/io\.fabric/d' "$f" || true
             sed -i '/maven\.fabric\.io/d' "$f" || true
             sed -i '/google-services/d' "$f" || true
             sed -i '/firebasex/d' "$f" || true
+            sed -i '/bintray/d' "$f" || true
+            sed -i '/com\.jfrog\.bintray/d' "$f" || true
+            sed -i 's/jcenter()/mavenCentral()/g' "$f" || true
           done
 
           ionic build --prod
@@ -112,7 +112,6 @@ jobs:
           rm -rf "${ANDROID_WWW:?}/"*
           cp -a www/. "$ANDROID_WWW/"
 
-          # local.properties: csak SDK, NDK nélkül
           echo "sdk.dir=${ANDROID_HOME:-$ANDROID_SDK_ROOT}" > platforms/android/local.properties
 
           cd platforms/android
