@@ -32,24 +32,45 @@ export class ErrorHandlerService extends ErrorHandler {
     }
 
     async handleError(error: any): Promise<void> {
-        if (error.promise && error.rejection) {
+        if (error && error.promise && error.rejection) {
             // Promise rejection wrapped by zone.js
             error = error.rejection;
         }
 
         let stackframes: StackTrace.StackFrame[];
-        if (typeof error === "object") {
-            stackframes = await StackTrace.fromError(error).catch(() => undefined);
+        try {
+            if (error && typeof error === "object") {
+                stackframes = await StackTrace.fromError(error).catch(() => undefined);
+            }
+        } catch (_) {
+            stackframes = undefined;
         }
 
-        const errorReportString = await this.appendAuthDebugToError(error);
-        this.firebase.logError(errorReportString, stackframes);
-        console.log("SENT TO CRASHLYTICS:\n", errorReportString, stackframes);
+        let errorReportString = "";
+        try {
+            errorReportString = await this.appendAuthDebugToError(error);
+        } catch (e) {
+            errorReportString =
+                (error && typeof error.toString === "function" ? error.toString() : String(error)) +
+                "\n(auth debug failed: " +
+                e +
+                ")";
+        }
 
-        // 400 - KretaInvalidRefreshTokenException comes from the IDP on wrong refresh token
-        // 401 - NaploHttpUnauthorizedException comes from API endpoints with wrong access_token
-        // 409 - KretaNewSchoolYearException means the token is only valid for the previous school year
-        // at this point we already retried the request with a new token
+        // Firebase plugin nélkül se dőljön el a hibakezelő
+        try {
+            if (this.firebase && typeof this.firebase.logError === "function") {
+                await this.firebase.logError(errorReportString, stackframes);
+            }
+        } catch (e) {
+            console.warn("Firebase logError skipped:", e);
+        }
+
+        console.error("ERROR REPORT:\n", errorReportString, stackframes || error);
+
+        // 400 - KretaInvalidRefreshTokenException – rossz refresh token
+        // 401 - NaploHttpUnauthorizedException – rossz access_token
+        // 409 - KretaNewSchoolYearException – előző tanév token
         if (
             error instanceof KretaInvalidRefreshTokenException ||
             error instanceof NaploHttpUnauthorizedException ||
@@ -58,30 +79,47 @@ export class ErrorHandlerService extends ErrorHandler {
             this.errorHelper.presentAlertFromError(error, () => {
                 this.kreta.logout();
             });
-
             return;
         }
 
-        // display error if needed
-        if (this.config.debugging && !error.handled) this.errorHelper.presentAlert(error);
-        if (!error.handled) {
-            this.errorHelper.presentToast(
-                this.translate.instant(
-                    error.messageTranslationKey
-                        ? error.messageTranslationKey
-                        : "exceptions.error-occurred"
-                ),
-                10000
-            );
+        // true = mindig részletes debug alert (teszteléshez)
+        // később: csak this.config.debugging
+        const showDebug = this.config.debugging === true;
+
+        if (!error || !error.handled) {
+            if (showDebug) {
+                await this.errorHelper.presentDebugError(error, "Hiba (debug)");
+            } else {
+                this.errorHelper.presentToast(
+                    this.translate.instant(
+                        error && error.messageTranslationKey
+                            ? error.messageTranslationKey
+                            : "exceptions.error-occurred"
+                    ),
+                    10000
+                );
+            }
         }
 
-        super.handleError(error);
+        try {
+            super.handleError(error);
+        } catch (_) {}
     }
 
     private async appendAuthDebugToError(error: any): Promise<string> {
-        let output = typeof error.toString === "function" ? error.toString() : error;
+        let output =
+            typeof error === "string"
+                ? error
+                : error && typeof error.toString === "function"
+                ? error.toString()
+                : String(error);
 
-        if (this.kreta.currentUser) {
+        // Részletes formázás (HTTP body stb.)
+        try {
+            output = this.errorHelper.formatError(error) + "\n\n" + output;
+        } catch (_) {}
+
+        if (this.kreta && this.kreta.currentUser) {
             output += "\n\n---- Kreta Token Debug ----\n";
             output += `Auth time: ${new Date(
                 this.kreta.currentUser.auth_time * 1000
@@ -89,9 +127,8 @@ export class ErrorHandlerService extends ErrorHandler {
             output += `Not before: ${new Date(this.kreta.currentUser.nbf * 1000).toISOString()}\n`;
             output += `Expiration: ${new Date(this.kreta.currentUser.exp * 1000).toISOString()}\n`;
 
-            // refresh token debug
             const rawRefreshToken = <StorageCacheItem>(
-                await this.data.getRawItem("refresh_token").catch(x => null)
+                await this.data.getRawItem("refresh_token").catch(() => null)
             );
             if (rawRefreshToken) {
                 output += `Refresh token cache expiry: ${new Date(rawRefreshToken.expires)}\n`;
@@ -103,7 +140,7 @@ export class ErrorHandlerService extends ErrorHandler {
             }
         }
 
-        if (this.eugy.currentEugyUser) {
+        if (this.eugy && this.eugy.currentEugyUser) {
             output += "\n---- Eugy Token Debug ----\n";
             output += `Auth time: ${new Date(
                 this.eugy.currentEugyUser.auth_time * 1000
@@ -115,9 +152,8 @@ export class ErrorHandlerService extends ErrorHandler {
                 this.eugy.currentEugyUser.exp * 1000
             ).toISOString()}\n`;
 
-            // refresh token debug
             const rawRefreshToken = <StorageCacheItem>(
-                await this.data.getRawItem("eugy_refresh_token").catch(x => null)
+                await this.data.getRawItem("eugy_refresh_token").catch(() => null)
             );
             if (rawRefreshToken) {
                 output += `Refresh token cache expiry: ${new Date(rawRefreshToken.expires)}\n`;
