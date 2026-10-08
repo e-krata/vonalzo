@@ -95,7 +95,7 @@ export class LoginPage {
             let deviceToken: string = null;
             try {
                 deviceToken = await this.kreta.getDeviceToken();
-            } catch (_) {}
+            } catch (err) {}
 
             await this.kreta.loginWithUsername(this.username, this.password, deviceToken);
 
@@ -103,3 +103,153 @@ export class LoginPage {
 
             this.kreta.deleteInstituteListFromStorage();
             this.firebase.logEvent("login", { method: "kreta" });
+
+            await Promise.all([
+                this.menuController.enable(true),
+                loading.dismiss(),
+                this.config.applyTheme("light"),
+            ]);
+
+            this.router.navigate([this.returnUrl], { replaceUrl: true });
+        } catch (e) {
+            console.log("Hiba a bejelentkezés során: ", e);
+
+            // Új API: 2FA szükséges
+            if (e && (e.name === "KretaMfaRequiredException" || e.mfa_token)) {
+                await loading.dismiss();
+                this.loading = false;
+                await this.promptMfa(e.mfa_token, e.message);
+                e.handled = true;
+                return;
+            }
+
+            if (e instanceof KretaInvalidPasswordException) {
+                this.firebase.logEvent("login_bad_credentials");
+                await this.errorHelper.presentAlertFromError(e);
+                return;
+            }
+
+            if (e instanceof KretaMissingRoleException) {
+                this.firebase.logEvent("login_missing_role");
+                const alert = await this.alertController.create({
+                    header: this.translate.instant("login.permission-needed"),
+                    message: this.translate.instant("login.teacher-role-needed"),
+                    buttons: [
+                        {
+                            text: this.translate.instant("common.no"),
+                            role: "cancel",
+                        },
+                        {
+                            text: this.translate.instant("common.yes"),
+                            handler: () => {
+                                this.firebase.logEvent("login_ariszto_opened");
+                                this.market.open("hu.coware.ellenorzo");
+                            },
+                        },
+                    ],
+                });
+                await alert.present();
+                return;
+            }
+
+            await this.errorHelper.presentAlertFromError(e);
+            if (e) {
+                e.handled = true;
+            }
+        } finally {
+            loading.dismiss();
+            this.loading = false;
+            this.firebase.stopTrace("login_time");
+        }
+    }
+
+    private async promptMfa(mfaToken: string, message?: string) {
+        const alert = await this.alertController.create({
+            header: "Kétfaktoros azonosítás",
+            message: message || "Add meg a 6 jegyű kódot az authenticator appból.",
+            inputs: [
+                {
+                    name: "code",
+                    type: "tel",
+                    placeholder: "123456",
+                    attributes: { maxlength: 12 },
+                },
+            ],
+            buttons: [
+                {
+                    text: this.translate.instant("common.cancel") || "Mégse",
+                    role: "cancel",
+                },
+                {
+                    text: "OK",
+                    handler: async data => {
+                        if (!data || !data.code) {
+                            return false;
+                        }
+                        const loading = await this.loadingController.create({
+                            message: this.translate.instant("login.logging-in"),
+                        });
+                        await loading.present();
+                        try {
+                            let deviceToken: string = null;
+                            try {
+                                deviceToken = await this.kreta.getDeviceToken();
+                            } catch (err) {}
+
+                            await this.kreta.loginWithMfa(mfaToken, data.code, true, deviceToken);
+
+                            this.kreta.deleteInstituteListFromStorage();
+                            this.firebase.logEvent("login", { method: "kreta_mfa" });
+                            await this.menuController.enable(true);
+                            await this.config.applyTheme("light");
+                            this.router.navigate([this.returnUrl], { replaceUrl: true });
+                        } catch (mfaErr) {
+                            console.error("MFA hiba:", mfaErr);
+                            await this.errorHelper.presentAlertFromError(mfaErr);
+                        } finally {
+                            loading.dismiss();
+                        }
+                    },
+                },
+            ],
+        });
+        await alert.present();
+    }
+
+    openPrivacy() {
+        this.firebase.logEvent("login_privacypolicy_opened");
+        this.safariViewController.isAvailable().then(async (available: boolean) => {
+            if (available) {
+                this.safariViewController
+                    .show({
+                        url: "https://coware-apps.github.io/naplo/privacy",
+                        barColor: "#3880ff",
+                        toolbarColor: "#3880ff",
+                        controlTintColor: "#ffffff",
+                    })
+                    .pipe(takeUntil(this.unsubscribe$))
+                    .subscribe({
+                        next: (result: any) => {},
+                        error: (error: any) => {
+                            console.error(error);
+                            this.firebase.logError(
+                                "login privacypolicy subscription error: " + error
+                            );
+                        },
+                    });
+            } else {
+                console.log("browser tab not supported");
+                this.iab.create("https://coware-apps.github.io/naplo/privacy", "_blank", {
+                    location: "yes",
+                    closebuttoncaption: this.translate.instant("common.back"),
+                    closebuttoncolor: "#ffffff",
+                    toolbarcolor: "#3880ff",
+                    zoom: "no",
+                    hideurlbar: "yes",
+                    hidenavigationbuttons: "yes",
+                    footer: "no",
+                });
+            }
+        });
+    }
+}
