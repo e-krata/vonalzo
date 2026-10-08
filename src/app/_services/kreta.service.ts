@@ -29,7 +29,6 @@ import {
 } from "../_exceptions";
 import { DataService } from "./data.service";
 import { FirebaseService } from "./firebase.service";
-import { environment } from "src/environments/environment";
 
 @Injectable({
     providedIn: "root",
@@ -38,10 +37,10 @@ export class KretaService {
     public readonly baseUrl = "https://ujkreta.onrender.com";
 
     private _institute: Institute = {
-        instituteCode: "mockschool",
-        name: "Mock Gimnázium",
+        instituteCode: "krata-demo-janos",
+        name: "KRÁTA János Általános Iskola",
         url: "https://ujkreta.onrender.com",
-        city: "Budapest",
+        city: "Budhapest",
     };
 
     public get institute(): Institute {
@@ -77,10 +76,16 @@ export class KretaService {
         if (await this.isAuthenticated()) {
             const token = await this.data.getRawItem("access_token").catch(() => null);
             if (token) {
-                this._currentUser = this.jwtHelper.decodeToken(token.value);
-                this.firebase.initialize(this.currentUser, this.institute);
+                try {
+                    this._currentUser = this.jwtHelper.decodeToken(token.value);
+                    this.firebase.initialize(this.currentUser, this.institute);
+                } catch (_) {}
             }
         }
+    }
+
+    public async getDeviceToken(): Promise<string> {
+        return this.data.getSetting<string>("device_token").catch(() => null);
     }
 
     public async getValidAccessToken(forceRefresh: boolean = false): Promise<string> {
@@ -99,18 +104,28 @@ export class KretaService {
         if (refresh_token) {
             console.debug("[LOGIN] Van valid RT, megújítás...");
             const accessToken = await this.loginWithRefreshToken(refresh_token);
-            this.firebase.initialize(this.jwtHelper.decodeToken(accessToken), this.institute);
+            try {
+                this.firebase.initialize(this.jwtHelper.decodeToken(accessToken), this.institute);
+            } catch (_) {}
             return accessToken;
         }
 
         throw new KretaException("Nincs érvényes token");
     }
 
-    async loginWithUsername(username: string, password: string): Promise<TokenResponse> {
-        const body = new HttpParams()
+    async loginWithUsername(
+        username: string,
+        password: string,
+        deviceToken?: string
+    ): Promise<TokenResponse> {
+        let body = new HttpParams()
             .set("grant_type", "password")
             .set("username", username)
             .set("password", password);
+
+        if (deviceToken) {
+            body = body.set("device_token", deviceToken);
+        }
 
         const response = await this.data
             .postUrl<TokenResponse>(
@@ -120,6 +135,40 @@ export class KretaService {
             )
             .toPromise();
 
+        return this.finishLogin(response, username);
+    }
+
+    /** Új API 2FA: POST /connect/mfa/verify */
+    async loginWithMfa(
+        mfaToken: string,
+        code: string,
+        trustDevice: boolean = false,
+        deviceToken?: string
+    ): Promise<TokenResponse> {
+        let body = new HttpParams().set("mfa_token", mfaToken).set("code", code);
+
+        if (trustDevice) {
+            body = body.set("trust_device", "true");
+        }
+        if (deviceToken) {
+            body = body.set("device_token", deviceToken);
+        }
+
+        const response = await this.data
+            .postUrl<TokenResponse>(
+                this.baseUrl + "/connect/mfa/verify",
+                body.toString(),
+                new HttpHeaders().set("Content-Type", "application/x-www-form-urlencoded")
+            )
+            .toPromise();
+
+        return this.finishLogin(response);
+    }
+
+    private async finishLogin(
+        response: TokenResponse,
+        usernameFallback?: string
+    ): Promise<TokenResponse> {
         if (!response || !response.access_token) {
             throw new KretaInvalidResponseException(response);
         }
@@ -132,18 +181,17 @@ export class KretaService {
             }
         } catch (e) {
             this._currentUser = {
-                name: username,
+                name: usernameFallback || "user",
                 role: "Tanar",
-                "kreta:user_name": username,
+                "kreta:user_name": usernameFallback || "user",
                 "kreta:institute_code": "mockschool",
                 "kreta:institute_user_id": "300",
-            };
+            } as any;
         }
 
         const roles = Array.isArray(this._currentUser.role)
             ? this._currentUser.role
             : [this._currentUser.role];
-
         console.debug("[LOGIN] Roles we have: ", roles);
 
         await Promise.all([
@@ -161,7 +209,14 @@ export class KretaService {
             ),
         ]);
 
-        this.firebase.initialize(this.currentUser, this.institute);
+        if ((response as any).device_token) {
+            await this.data.saveSetting("device_token", (response as any).device_token);
+        }
+
+        try {
+            this.firebase.initialize(this.currentUser, this.institute);
+        } catch (_) {}
+
         return response;
     }
 
@@ -178,7 +233,9 @@ export class KretaService {
         this.loginInProgress = true;
 
         try {
-            await this.firebase.startTrace("token_refresh_time");
+            try {
+                await this.firebase.startTrace("token_refresh_time");
+            } catch (_) {}
 
             const body = new HttpParams()
                 .set("grant_type", "refresh_token")
@@ -212,10 +269,12 @@ export class KretaService {
                     if (response.id_token) {
                         this._currentUser = this.jwtHelper.decodeToken(response.id_token);
                     }
-                } catch {}
+                } catch (_) {}
 
                 console.debug("[LOGIN] AT sikeresen megújítva RT-el");
-                this.firebase.stopTrace("token_refresh_time");
+                try {
+                    this.firebase.stopTrace("token_refresh_time");
+                } catch (_) {}
                 return response.access_token;
             } else {
                 throw new KretaInvalidResponseException(response);
@@ -226,7 +285,7 @@ export class KretaService {
     }
 
     async logout() {
-        await Promise.all([this.data.clearAll(), this.firebase.unregister()]);
+        await Promise.all([this.data.clearAll(), this.firebase.unregister().catch(() => {})]);
         window.location.replace("/login");
     }
 
@@ -273,6 +332,11 @@ export class KretaService {
         return this.getAuthenticated<ApiTanulo[]>("/naplo/v3/sajat/Tanulok", 60 * 60);
     }
 
+    /** Osztályfőnök – új API */
+    getOfDiakok(): Observable<any[]> {
+        return this.getAuthenticated<any[]>("/naplo/v3/sajat/Of/Diakok", 60 * 60);
+    }
+
     getOrarendElemek(forceRefresh: boolean = false): Observable<any[]> {
         return this.getAuthenticated<any[]>(
             "/naplo/v3/sajat/OrarendElemek",
@@ -305,7 +369,8 @@ export class KretaService {
             Tema: item.Tema || item.Szoveg || item.Nev || "",
             TantargyId: tantargy.Uid || item.TantargyUid || item.TantargyId,
             TantargyNev: tantargy.Nev || item.TantargyNev || item.Nev || "",
-            TantargyKategoria: (tantargy.Kategoria && tantargy.Kategoria.Nev) || item.TantargyKategoria || "",
+            TantargyKategoria:
+                (tantargy.Kategoria && tantargy.Kategoria.Nev) || item.TantargyKategoria || "",
             OsztalyCsoportId: osztaly.Uid || item.OsztalyCsoportUid || item.OsztalyCsoportId,
             OsztalyCsoportNev: osztaly.Nev || item.OsztalyCsoportNev || "",
             TeremNev: item.TeremNeve || item.TeremNev || "",
@@ -384,6 +449,7 @@ export class KretaService {
             new HttpHeaders().set("Content-Type", "application/json")
         );
     }
+
     getNaploEnum(engedelyezettEnumName: string = "MulasztasTipusEnum"): Promise<KretaEnum[]> {
         const mocks: { [key: string]: KretaEnum[] } = {
             MulasztasTipusEnum: [
@@ -484,9 +550,10 @@ export class KretaService {
                 let szovegesErtek: string | undefined;
 
                 if (ertekeles.OsztalyzatTipus) {
-                    let id = ertekeles.OsztalyzatTipus.Id != null
-                        ? ertekeles.OsztalyzatTipus.Id
-                        : ertekeles.OsztalyzatTipus.Uid;
+                    let id =
+                        ertekeles.OsztalyzatTipus.Id != null
+                            ? ertekeles.OsztalyzatTipus.Id
+                            : ertekeles.OsztalyzatTipus.Uid;
                     id = typeof id === "number" ? id : parseInt(String(id), 10);
                     szamErtek = id >= 1500 ? id - 1500 : id;
                     szovegesErtek = ertekeles.OsztalyzatTipus.Nev || String(szamErtek);
@@ -504,7 +571,9 @@ export class KretaService {
                     SzovegesErtek: szovegesErtek,
                     SulySzazalekErteke: 100,
                     Tipus: group.Tipus || group.Mod || { Uid: "1", Nev: "Évközi jegy/értékelés" },
-                    OsztalyCsoportUid: String(group.OsztalycsoportId || group.OsztalyCsoportId || ""),
+                    OsztalyCsoportUid: String(
+                        group.OsztalycsoportId || group.OsztalyCsoportId || ""
+                    ),
                     TanuloUid: String(tanulo.TanuloId || tanulo.Uid || ""),
                 };
 
