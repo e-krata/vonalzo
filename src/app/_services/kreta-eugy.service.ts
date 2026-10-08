@@ -1,77 +1,29 @@
 import { Injectable } from "@angular/core";
-import { HttpParams, HttpHeaders } from "@angular/common/http";
-import { Observable } from "rxjs";
-import { map, tap } from "rxjs/operators";
+import { HttpHeaders } from "@angular/common/http";
+import { Observable, of, from } from "rxjs";
+import { map, switchMap } from "rxjs/operators";
 import { Institute, TokenResponse, Jwt } from "../_models";
-import {
-    Message,
-    InstituteEugy,
-    MessageListItem,
-    MessageAddressee,
-    AddresseeGroup,
-    AddresseeType,
-    ParentAddresseeListItem,
-    StudentAddresseeListItem,
-    MessageAttachmentToSend,
-} from "../_models/eugy";
-
-import {
-    KretaEUgyInvalidResponseException,
-    KretaEUgyNotLoggedInException,
-    KretaEUgyException,
-    KretaEUgyMessageAttachmentException,
-} from "../_exceptions";
-
 import { DataService } from "./data.service";
 import { KretaService } from "./kreta.service";
 import { FirebaseService } from "./firebase.service";
 
-import { File, FileEntry } from "@ionic-native/file/ngx";
-import {
-    FileTransfer,
-    FileUploadOptions,
-    FileTransferObject,
-} from "@ionic-native/file-transfer/ngx";
-import { JwtDecodeHelper } from "../_helpers";
-
+/**
+ * Új API e-ügyintézés
+ * Base: {kreta.baseUrl}/integration-kretamobile-api/v1/kommunikacio
+ * Auth: ugyanaz a Bearer, mint a napló (kreta.getValidAccessToken)
+ */
 @Injectable({
     providedIn: "root",
 })
 export class KretaEUgyService {
-    public host = "https://eugyintezes.e-kreta.hu/api/v1/";
-    private endpoints = {
-        instituteDetails: "ugy/aktualisIntezmenyAdatok",
-        inboxList: "kommunikacio/postaladaelemek/beerkezett",
-        outboxList: "kommunikacio/postaladaelemek/elkuldott",
-        deletedList: "kommunikacio/postaladaelemek/torolt",
-        message: "kommunikacio/postaladaelemek",
-        manageBin: "kommunikacio/postaladaelemek/kuka",
-        delete: "kommunikacio/postaladaelemek/torles",
-        manageState: "kommunikacio/postaladaelemek/olvasott",
-        addresseeTypesList: "kommunikacio/cimezhetotipusok",
-        addresseeCategories: {
-            teachers: "kreta/alkalmazottak/tanar",
-            headTeachers: "kreta/alkalmazottak/oszalyfonok",
-            directorate: "kreta/alkalmazottak/igazgatosag",
-            admins: "kreta/alkalmazottak/adminisztrator",
-            groups: "kommunikacio/tanoraicsoportok/cimezheto",
-            classes: "kommunikacio/osztalyok/cimezheto",
-            szmk: "kommunikacio/szmkkepviselok/cimezheto",
-            tutelaries: {
-                byGroups: "kreta/gondviselok/tanoraicsoport",
-                byClasses: "kreta/gondviselok/osztaly",
-            },
-            students: {
-                byGroups: "kreta/tanulok/tanoraicsoportok",
-                byClasses: "kreta/tanulok/osztalyok",
-            },
-        },
-        newMessage: "kommunikacio/uzenetek",
-        temporaryAttachmentStorage: "ideiglenesfajlok",
-        finalAttachmentStorage: "dokumentumok/uzenetek",
-    };
-    private longtermStorageExpiry = 72 * 30 * 24 * 60 * 60;
-    private loginInProgress: boolean = false;
+    private get base(): string {
+        return (
+            (this.kreta.baseUrl || "https://ujkreta.onrender.com") +
+            "/integration-kretamobile-api/v1/kommunikacio"
+        );
+    }
+
+    public host = "https://ujkreta.onrender.com/integration-kretamobile-api/v1/";
 
     public get currentUser(): Jwt {
         return this.kreta.currentUser;
@@ -79,561 +31,240 @@ export class KretaEUgyService {
 
     private _currentEugyUser: Jwt;
     public get currentEugyUser(): Jwt {
-        return this._currentEugyUser;
+        return this._currentEugyUser || this.kreta.currentUser;
     }
 
     constructor(
         private data: DataService,
         private kreta: KretaService,
-        private file: File,
-        private fileTransfer: FileTransfer,
-        private firebase: FirebaseService,
-        private tokenHelper: JwtDecodeHelper
+        private firebase: FirebaseService
     ) {}
 
-    /**
-     * Gets a valid access_token from storage or from the IDP
-     * @returns A promise that resolves to a valid access_token
-     */
+    /** Új API: ugyanaz a token, mint a napló */
     public async getValidAccessToken(forceRefresh: boolean = false): Promise<string> {
-        if (!forceRefresh) {
-            // If there's a valid access token in the cache, we use that
-            const access_token = await this.data.getItem<string>("eugy_access_token").catch(() => {
-                console.debug("[EUGY] Nincs valid AT");
-                return null;
-            });
-
-            if (access_token) {
-                this._currentEugyUser = this.tokenHelper.decodeToken(access_token);
-                return access_token;
-            }
-        }
-
-        // If there isn't or it's expried, we refresh it
-        const refresh_token = await this.data.getItem<string>("eugy_refresh_token").catch(() => {
-            throw new KretaEUgyNotLoggedInException();
-        });
-
-        console.debug("[EUGY] Van valid RT, megújítás...");
-        return this.renewToken(refresh_token, this.kreta.institute);
+        const token = await this.kreta.getValidAccessToken(forceRefresh);
+        this._currentEugyUser = this.kreta.currentUser;
+        return token;
     }
 
     /**
-     * Logs the user in with username and password.
-     * @param username username used to log in
-     * @param password password used to log in
-     * @param institute the institute of the user
-     * @returns A Promise that resolves to an access token
+     * Régi külön eügy login – új API-n nem kell.
+     * Meghívható, de csak a meglévő kreta tokent használja.
      */
     public async getToken(
         username: string,
         password: string,
         institute: Institute
     ): Promise<TokenResponse> {
-        const params = {
-            userName: username,
-            password: password,
-            institute_code: institute.instituteCode,
-            grant_type: "password",
-            client_id: "kozelkep-js-web",
-        };
-
-        const response = await this.data
-            .postUrl<TokenResponse>(
-                "https://idp.e-kreta.hu/connect/Token",
-                new HttpParams({ fromObject: params }).toString(),
-                new HttpHeaders().set("Content-Type", "application/x-www-form-urlencoded")
-            )
-            .toPromise();
-
-        console.debug("[EUGY] getToken result:", response);
-
-        if (!response.access_token) throw new KretaEUgyInvalidResponseException(response);
-
-        await Promise.all([
-            this.data.saveItem(
-                "eugy_access_token",
-                response.access_token,
-                null,
-                response.expires_in - 30
-            ),
-            this.data.saveItem(
-                "eugy_refresh_token",
-                response.refresh_token,
-                null,
-                this.longtermStorageExpiry
-            ),
-            this.data.saveSetting("eugy_institute", await this.getInstituteDetails()),
-        ]);
-
-        return response;
+        // Már be vagyunk jelentkezve a kreta.loginWithUsername-mel
+        const access = await this.kreta.getValidAccessToken();
+        this._currentEugyUser = this.kreta.currentUser;
+        return {
+            access_token: access,
+            refresh_token: "",
+            expires_in: 43200,
+            token_type: "Bearer",
+        } as TokenResponse;
     }
 
-    private delay(timer: number): Promise<void> {
-        return new Promise(resolve => setTimeout(() => resolve(), timer));
-    }
-
-    /**
-     * Logs the user in with a previously acquired refresh token
-     * @param refresh_token the refresh token to log the user in wit
-     * @param institute the user's institute
-     * @returns A Promise that resolves to an access_token
-     */
     public async renewToken(refresh_token: string, institute: Institute): Promise<string> {
-        if (this.loginInProgress) {
-            while (this.loginInProgress) await this.delay(20);
-            return this.getValidAccessToken();
-        }
-
-        this.loginInProgress = true;
-
-        try {
-            const params = {
-                refresh_token: refresh_token,
-                grant_type: "refresh_token",
-                institute_code: institute.instituteCode,
-                client_id: "kozelkep-js-web",
-            };
-            console.log(`[EUGY->renewToken()] renewing tokens with refreshToken`, refresh_token);
-
-            const response = await this.data
-                .postUrl<TokenResponse>(
-                    "https://idp.e-kreta.hu/connect/Token",
-                    new HttpParams({ fromObject: params }).toString(),
-                    new HttpHeaders().set("Content-Type", "application/x-www-form-urlencoded")
-                )
-                .toPromise();
-
-            if (!response.access_token) throw new KretaEUgyInvalidResponseException(response);
-
-            await Promise.all([
-                this.data.saveItem(
-                    "eugy_access_token",
-                    response.access_token,
-                    null,
-                    response.expires_in - 30
-                ),
-                this.data.saveItem(
-                    "eugy_refresh_token",
-                    response.refresh_token,
-                    null,
-                    this.longtermStorageExpiry
-                ),
-            ]);
-
-            this._currentEugyUser = this.tokenHelper.decodeToken(response.access_token);
-            return response.access_token;
-        } finally {
-            this.loginInProgress = false;
-        }
+        return this.getValidAccessToken(true);
     }
 
     public async logout(): Promise<any> {
-        return Promise.all([
-            this.data.removeItem("eugy_access_token"),
-            this.data.removeItem("eugy_refresh_token"),
-            this.clearAttachmentCache(),
-        ]);
+        this._currentEugyUser = null;
+        return Promise.resolve();
     }
 
-    /**
-     * Returns whether the user is logged in to EUgy or not
-     * @returns boolean
-     */
     public async isAuthenticated(): Promise<boolean> {
-        return (await this.data.itemExists("eugy_refresh_token")) === true;
+        return this.kreta.isAuthenticated();
+    }
+
+    public async isMessagingEnabled(): Promise<boolean> {
+        return true;
+    }
+
+    public async getInstituteDetails(): Promise<any> {
+        return this.kreta.institute;
+    }
+
+    private authHeaders(token: string): HttpHeaders {
+        return new HttpHeaders()
+            .set("Authorization", "Bearer " + token)
+            .set("Content-Type", "application/json");
     }
 
     /**
-     * Returns the details of the current institute
-     * @returns A promise that resolves to an InstituteEugy
-     */
-    public async getInstituteDetails(): Promise<InstituteEugy> {
-        const response = await this.data
-            .getUrl<InstituteEugy>(this.host + this.endpoints.instituteDetails)
-            .toPromise();
-
-        await this.data.saveSetting("eugy_institute", response);
-        return response;
-    }
-
-    /**
-     * Gets whether the messaging service is enabled in the institution
-     * @returns boolean
-     */
-    public async isMessagingEnabled() {
-        const institute: InstituteEugy = await this.data
-            .getSetting("eugy_institute")
-            .catch(() => null);
-
-        if (!institute) throw new KretaEUgyException("No institution settings available.");
-        return institute.IsUzenetKezelesElerheto;
-    }
-
-    /**
-     * Gets the user's message list by a specified category (state)
-     * @param state From which category to get the message list
+     * Üzenetlista – GET /postaladaelemek/sajat
+     * A UI inbox/outbox/deleted típusokat várhat; a mock egy listát ad.
      */
     public getMessageList(
-        state: "inbox" | "outbox" | "deleted",
-        forceRefresh = false
-    ): Observable<MessageListItem[]> {
-        const response = this.data.getUrlWithCache<MessageListItem[]>(
-            this.host + this.endpoints[`${state}List`],
-            null,
-            null,
-            null,
-            forceRefresh
-        );
-
-        return response.pipe(
-            tap({
-                next: item => {
-                    if (!item) throw new KretaEUgyInvalidResponseException(item);
-                },
-            }),
-            map(item =>
-                item.map(x => {
-                    x.uzenetKuldesDatum = new Date(x.uzenetKuldesDatum);
-                    return x;
-                })
-            )
-        );
-    }
-
-    public getMessage(messageId: number, forceRefresh: boolean = false): Observable<Message> {
-        return this.data
-            .getUrlWithCache<Message>(
-                this.host + this.endpoints.message + "/" + messageId,
-                null,
-                null,
-                null,
-                forceRefresh
-            )
-            .pipe(
-                tap({
-                    next: message => {
-                        if (!message || !message.uzenet)
-                            throw new KretaEUgyInvalidResponseException(message);
-                    },
-                })
-            );
-    }
-
-    /**
-     * Put a message in the bin (it can be reverted)
-     * @param action Choose put to put the message in the bin, remove to remove it.
-     * @param messageIdList The `azonosito` fields of the messages to perform the operation on
-     */
-    public binMessages(action: "put" | "remove", messageIdList: number[]): Observable<any> {
-        const params = {
-            isKuka: action == "put",
-            postaladaElemAzonositoLista: messageIdList,
-        };
-
-        messageIdList.map(id =>
-            this.data.removeItem(this.host + this.endpoints.message + "/" + id).catch(() => null)
-        );
-        this.data.removeItem(this.host + this.endpoints.deletedList).catch(() => null);
-        return this.data.postUrl<any>(this.host + this.endpoints.manageBin, params);
-    }
-
-    /**
-     * Delete a message permanently (HOT!)
-     * @param messageIdList The `uzenetAzonosito` fields of the messages to perform the operation on
-     */
-    public deleteMessages(messageIdList: number[]): Observable<any> {
-        const queryParams: string[] = [];
-        messageIdList.forEach(messageId =>
-            queryParams.push("postaladaElemAzonositok=" + messageId.toString())
-        );
-
-        return this.data.deleteUrl<any>(
-            this.host + this.endpoints.delete + "?" + queryParams.join("&")
+        type?: "inbox" | "outbox" | "deleted" | string,
+        forceRefresh: boolean = false
+    ): Observable<any[]> {
+        const url = this.base + "/postaladaelemek/sajat";
+        return from(this.getValidAccessToken()).pipe(
+            switchMap(token =>
+                this.data.getUrlWithCache<any[]>(
+                    url,
+                    null,
+                    this.authHeaders(token),
+                    5 * 60,
+                    forceRefresh
+                )
+            ),
+            map(list => {
+                if (!Array.isArray(list)) {
+                    return [];
+                }
+                // Minimális normalizálás a régi Message modellhez
+                return list.map(function (item) {
+                    return {
+                        azonosito: item.azonosito || item.Uid || item.id || item.Id,
+                        uzenetAzonosito: item.uzenetAzonosito || item.azonosito || item.Uid,
+                        targy: item.targy || item.Targy || item.subject || "(nincs tárgy)",
+                        szoveg: item.szoveg || item.Szoveg || item.preview || "",
+                        feladoNev: item.feladoNev || item.FeladoNev || item.from || "",
+                        cimzettNev: item.cimzettNev || item.CimzettNev || "",
+                        isOlvasott:
+                            item.isOlvasott != null
+                                ? item.isOlvasott
+                                : item.IsOlvasott != null
+                                ? item.IsOlvasott
+                                : false,
+                        datum: item.datum || item.Datum || item.date,
+                        raw: item,
+                    };
+                });
+            })
         );
     }
 
-    /**
-     * Set a message's state either read or to unread
-     * @param newState Choose read to set the message as read, unread to set it as unread
-     * @param messageIdList The `uzenetAzonosito` fields of the messages to perform the operation on
-     */
+    /** Teljes üzenet – GET /postaladaelemek/{id} */
+    public getMessage(messageId: number | string, forceRefresh: boolean = false): Observable<any> {
+        const url = this.base + "/postaladaelemek/" + encodeURIComponent(String(messageId));
+        return from(this.getValidAccessToken()).pipe(
+            switchMap(token =>
+                this.data.getUrlWithCache<any>(
+                    url,
+                    null,
+                    this.authHeaders(token),
+                    5 * 60,
+                    forceRefresh
+                )
+            ),
+            map(item => {
+                if (!item) {
+                    return item;
+                }
+                return {
+                    azonosito: item.azonosito || item.Uid || messageId,
+                    uzenetAzonosito: item.uzenetAzonosito || item.azonosito || messageId,
+                    targy: item.targy || item.Targy || "",
+                    szoveg: item.szoveg || item.Szoveg || item.tartalom || "",
+                    feladoNev: item.feladoNev || item.FeladoNev || "",
+                    cimzettNev: item.cimzettNev || item.CimzettNev || "",
+                    isOlvasott: item.isOlvasott != null ? item.isOlvasott : false,
+                    datum: item.datum || item.Datum,
+                    raw: item,
+                };
+            })
+        );
+    }
+
+    /** Olvasottnak jelölés – POST /uzenetek/olvasott */
     public changeMessageState(
-        newState: "read" | "unread",
+        isOlvasott: boolean,
         messageIdList: number[]
     ): Observable<any> {
-        const params = {
-            isOlvasott: newState == "read",
-            postaladaElemAzonositoLista: messageIdList,
+        const url = this.base + "/uzenetek/olvasott";
+        const body = {
+            isOlvasott: isOlvasott,
+            uzenetAzonositoLista: messageIdList,
         };
-
-        messageIdList.map(id =>
-            this.data.removeItem(this.host + this.endpoints.message + "/" + id).catch(() => null)
-        );
-        return this.data.postUrl<any>(this.host + this.endpoints.manageState, params);
-    }
-
-    public getAddresseeGroups(
-        addresseeType: "tutelaries" | "students",
-        groupType: "classes" | "groups"
-    ): Observable<AddresseeGroup[]> {
-        const params = {
-            cimzettKod: addresseeType == "tutelaries" ? "GONDVISELOK" : "TANULOK",
-        };
-        let endpoint = this.endpoints.addresseeCategories[groupType];
-        return this.data.getUrlWithCache<AddresseeGroup[]>(
-            this.host + endpoint,
-            params,
-            new HttpHeaders().set("Content-Type", "application/x-www-form-urlencoded")
+        return from(this.getValidAccessToken()).pipe(
+            switchMap(token =>
+                this.data.postUrl(url, body, this.authHeaders(token))
+            )
         );
     }
 
-    /**
-     * Replies to an existing message
-     * @param messageId The `uzenetAzonosito` field of the message to reply to
-     * @param targy The subject of the new message
-     * @param szoveg The text of the new message (Can include HTML tags)
-     * @param attachmentList The list of attachments to send with the message
-     */
+    /** Új üzenet – POST /uzenetek */
+    public sendNewMessage(data: {
+        targy: string;
+        szoveg: string;
+        cimzettUid?: string;
+        cimzettNev?: string;
+    }): Observable<any> {
+        const url = this.base + "/uzenetek";
+        const body = {
+            targy: data.targy || "",
+            szoveg: data.szoveg || "",
+            cimzettUid: data.cimzettUid || "",
+            cimzettNev: data.cimzettNev || "",
+        };
+        return from(this.getValidAccessToken()).pipe(
+            switchMap(token =>
+                this.data.postUrl(url, body, this.authHeaders(token))
+            )
+        );
+    }
+
+    /** Válasz – mock: ugyanaz, mint az új üzenet */
     public replyToMessage(
-        messageId: number,
-        targy: string,
-        szoveg: string,
-        attachmentList: MessageAttachmentToSend[]
-    ): Promise<any> {
-        const params = {
-            targy: targy,
-            szoveg: szoveg,
-            elozoUzenetAzonosito: messageId,
-            cimzettLista: [],
-            csatolmanyok: attachmentList,
-        };
-
-        this.data.removeItem(this.host + this.endpoints.outboxList).catch(() => null);
-        return this.data.postUrl<any>(this.host + this.endpoints.newMessage, params).toPromise();
+        originalId: number | string,
+        data: { targy?: string; szoveg: string; cimzettUid?: string; cimzettNev?: string }
+    ): Observable<any> {
+        return this.sendNewMessage({
+            targy: data.targy || "Re:",
+            szoveg: data.szoveg,
+            cimzettUid: data.cimzettUid,
+            cimzettNev: data.cimzettNev,
+        });
     }
 
-    /**
-     * Sends a new message
-     * @param addresseeList The list of addressees to send the message to
-     * @param targy The subject of the new message
-     * @param szoveg The text of the new message (Can include HTML tags)
-     * @param attachmentList The list of attachments to send with the message
-     * @see The documentation for more info about addressees
-     */
-    public sendNewMessage(
-        addresseeList: MessageAddressee[],
-        targy: string,
-        szoveg: string,
-        attachmentList: MessageAttachmentToSend[]
-    ): Promise<any> {
-        const params = {
-            targy: targy,
-            szoveg: szoveg,
-            elozoUzenetAzonosito: null,
-            cimzettLista: addresseeList,
-            csatolmanyok: attachmentList,
-        };
+    // --- Régi API metódusok: no-op / üres, hogy ne törjön a UI ---
 
-        this.data.removeItem(this.host + this.endpoints.outboxList).catch(() => null);
-        return this.data.postUrl<any>(this.host + this.endpoints.newMessage, params).toPromise();
+    public binMessages(action: "put" | "remove", messageIdList: number[]): Observable<any> {
+        console.warn("[EUGY] binMessages nincs az új API-n");
+        return of({ success: false });
     }
 
-    /**
-     * Gets the types of addressees the user can choose from. It is used to display category names descriptions etc.
-     * @see The documentation for more info about addressees
-     */
-    public getAddresseeTypeList(): Observable<AddresseeType[]> {
-        return this.data.getUrlWithCache<AddresseeType[]>(
-            this.host + this.endpoints.addresseeTypesList
-        );
+    public deleteMessages(messageIdList: number[]): Observable<any> {
+        console.warn("[EUGY] deleteMessages nincs az új API-n");
+        return of({ success: false });
     }
 
-    /**
-     * Gets the list of possible addressees to send a message to, from a specified category.
-     * @param category The category from which to get the list of possible addressees
-     */
-    public getAddresseListByCategory(
-        category: "teachers" | "headTeachers" | "directorate" | "admins"
-    ): Observable<MessageAddressee[]> {
-        return this.data.getUrlWithCache<MessageAddressee[]>(
-            this.host + this.endpoints.addresseeCategories[category]
-        );
+    public getAddresseeTypeList(): Observable<any[]> {
+        return of([]);
     }
 
-    public getStudentsOrParents(
-        category: "students" | "tutelaries",
-        by: "byGroups" | "byClasses",
-        groupOrClassId: number
-    ): Observable<ParentAddresseeListItem[] | StudentAddresseeListItem[]> {
-        return this.data.getUrlWithCache<ParentAddresseeListItem[] | StudentAddresseeListItem[]>(
-            this.host + this.endpoints.addresseeCategories[category][by] + `/${groupOrClassId}`
-        );
+    public getAddresseListByCategory(category?: string): Observable<any[]> {
+        return of([]);
     }
 
-    /**
-     * Add an attachment to the temporary attachment storage.
-     * @param filePath The device native file path
-     * @returns Promise
-     */
-    public async addAttachment(
-        filePath: string,
-        onProgressCallback?: (event: ProgressEvent) => any
-    ): Promise<MessageAttachmentToSend> {
-        if (!filePath)
-            throw new KretaEUgyMessageAttachmentException("Missing file path on upload", null);
-
-        const fileName = filePath.substr(filePath.lastIndexOf("/") + 1);
-
-        const fileTransfer: FileTransferObject = this.fileTransfer.create();
-        if (onProgressCallback) fileTransfer.onProgress(onProgressCallback);
-
-        let options: FileUploadOptions = {
-            fileKey: "fajl",
-            fileName: fileName,
-            headers: {
-                Authorization: "Bearer " + (await this.getValidAccessToken()),
-                "User-Agent": await this.firebase.getConfigValue("user_agent"),
-            },
-        };
-
-        let response;
-        try {
-            response = await fileTransfer.upload(
-                encodeURI(filePath),
-                this.host + this.endpoints.temporaryAttachmentStorage,
-                options
-            );
-        } catch (error) {
-            throw new KretaEUgyMessageAttachmentException(
-                error.exception,
-                fileName,
-                error.code,
-                error.http_status,
-                error.body
-            );
-        }
-
-        try {
-            const parsedResponse = JSON.parse(response.response);
-
-            if (
-                !response ||
-                !parsedResponse.fajlAzonosito ||
-                parsedResponse.fajlAzonosito.length != 36
-            )
-                throw new KretaEUgyException("Invalid fajlAzonosito received after upload");
-
-            return <MessageAttachmentToSend>{
-                fajlNev: fileName,
-                fajl: {
-                    ideiglenesFajlAzonosito: parsedResponse.fajlAzonosito,
-                    utvonal: "",
-                    azonosito: null,
-                    fileHandler: "Local",
-                },
-                iktatoszam: null,
-            };
-        } catch (error) {
-            throw new KretaEUgyInvalidResponseException(response.response);
-        }
+    public getAddresseeGroups(): Observable<any[]> {
+        return of([]);
     }
 
-    /**
-     * Removes an attachment from the temporary attachment storage. Used for drafting messages.
-     * @param attachmentId The id of the attachment to remove
-     */
+    public getStudentsOrParents(): Observable<any[]> {
+        return of([]);
+    }
+
+    public async addAttachment(): Promise<any> {
+        console.warn("[EUGY] csatolmány nincs az új API-n");
+        return null;
+    }
+
     public removeAttachment(attachmentId: string): Promise<any> {
-        const params = {
-            utvonal: "",
-            fajlAzonosito: attachmentId,
-        };
-
-        return this.data
-            .deleteUrl<any>(
-                this.host + this.endpoints.temporaryAttachmentStorage,
-                undefined,
-                new HttpParams({ fromObject: params })
-            )
-            .toPromise();
+        return Promise.resolve();
     }
 
-    /**
-     * Gets an attachment from the final attachment storage. Use this for existing messages.
-     * @param fileId The id of the file to get from the server
-     * @param fileNameWithExt The name of the file to get form the server (used to save the file), with extension
-     * @param onProgressCallback Listener that takes a progress event.
-     */
-    public async getAttachment(
-        fileId: number,
-        fileNameWithExt: string,
-        onProgressCallback?: (event: ProgressEvent) => any
-    ): Promise<FileEntry> {
-        const splitAt = (index: number) => (x: string) => [x.slice(0, index), x.slice(index)];
-        const newName = splitAt(fileNameWithExt.lastIndexOf("."))(fileNameWithExt);
-        newName[1] = newName[1].slice(1);
-
-        const name = newName[0] + "_" + fileId + "." + newName[1];
-
-        const messageCacheDir = await this.file.getDirectory(
-            await this.file.resolveDirectoryUrl(this.file.cacheDirectory),
-            "msgattachment",
-            { create: true }
-        );
-
-        const fileExists = await this.file
-            .checkFile(messageCacheDir.toInternalURL(), name)
-            .catch(() => false);
-        if (fileExists) {
-            console.debug("File exists in cache");
-            const fileEntry = await this.file
-                .getFile(messageCacheDir, name, {
-                    create: false,
-                })
-                .catch(() => null);
-
-            if (fileEntry) return fileEntry;
-        }
-
-        const fileTransfer: FileTransferObject = this.fileTransfer.create();
-        if (onProgressCallback) fileTransfer.onProgress(onProgressCallback);
-
-        let fileEntry: FileEntry;
-        try {
-            fileEntry = await fileTransfer.download(
-                `${this.host}${this.endpoints.finalAttachmentStorage}/${fileId}`,
-                messageCacheDir.toInternalURL() + name,
-                undefined,
-                {
-                    headers: {
-                        Authorization: "Bearer " + (await this.getValidAccessToken()),
-                        "User-Agent": await this.firebase.getConfigValue("user_agent"),
-                    },
-                }
-            );
-        } catch (error) {
-            throw new KretaEUgyMessageAttachmentException(
-                error.exception,
-                name,
-                error.code,
-                error.http_status,
-                error.body
-            );
-        }
-
-        return fileEntry;
+    public async getAttachment(): Promise<any> {
+        return null;
     }
 
     public clearAttachmentCache(): Promise<void> {
-        return new Promise(async (resolve, reject) => {
-            this.file
-                .getDirectory(
-                    await this.file.resolveDirectoryUrl(this.file.cacheDirectory),
-                    "msgattachment",
-                    { create: false }
-                )
-                .then(messageCacheDir => messageCacheDir.removeRecursively(resolve, reject))
-                .catch(resolve);
-        });
+        return Promise.resolve();
     }
 }
