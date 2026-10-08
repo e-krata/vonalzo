@@ -270,7 +270,7 @@ export class KretaEUgyService {
     }
 
     public async getAttachment(
-        fileId: string,
+        fileId: string | number,
         fileNameWithExt: string,
         onProgressCallback?: (event: ProgressEvent) => any
     ): Promise<FileEntry> {
