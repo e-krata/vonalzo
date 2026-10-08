@@ -13,51 +13,88 @@ export class FirebaseService {
 
     public async initialize(currentUser: Jwt, institute: Institute) {
         if (this.initialized) return;
+        if (!currentUser) {
+            this.initialized = true;
+            return;
+        }
 
-        this.firebase.setUserId(currentUser["kreta:institute_user_unique_id"]);
-        this.firebase.setUserProperty("kreta_institute_code", currentUser["kreta:institute_code"]);
-        this.firebase.setUserProperty("kreta_institute_name", institute.name);
-        this.firebase.setUserProperty("kreta_institute_city", institute.city);
-        this.firebase.setCrashlyticsUserId(currentUser["kreta:institute_user_unique_id"]);
+        try {
+            const userId =
+                currentUser["kreta:institute_user_unique_id"] ||
+                currentUser["kreta:institute_user_id"] ||
+                currentUser["kreta:user_name"] ||
+                currentUser["name"] ||
+                "unknown";
+
+            if (this.firebase && typeof this.firebase.setUserId === "function") {
+                await this.firebase.setUserId(String(userId)).catch(function () {});
+            }
+            if (this.firebase && typeof this.firebase.setUserProperty === "function") {
+                await this.firebase
+                    .setUserProperty(
+                        "kreta_institute_code",
+                        String(currentUser["kreta:institute_code"] || "mockschool")
+                    )
+                    .catch(function () {});
+                await this.firebase
+                    .setUserProperty(
+                        "kreta_institute_name",
+                        institute && institute.name ? institute.name : "unknown"
+                    )
+                    .catch(function () {});
+                await this.firebase
+                    .setUserProperty(
+                        "kreta_institute_city",
+                        institute && institute.city ? institute.city : ""
+                    )
+                    .catch(function () {});
+            }
+            if (this.firebase && typeof this.firebase.setCrashlyticsUserId === "function") {
+                await this.firebase.setCrashlyticsUserId(String(userId)).catch(function () {});
+            }
+        } catch (e) {
+            console.warn("[Firebase] initialize skipped:", e);
+        }
+
         this.initialized = true;
     }
 
     public setAnalyticsCollectionEnabled(enabled: boolean): Promise<any> {
-        return this.firebase.setAnalyticsCollectionEnabled(enabled);
+        return this.safeCall("setAnalyticsCollectionEnabled", [enabled]);
     }
 
     public setPerformanceCollectionEnabled(enabled: boolean): Promise<any> {
-        return this.firebase.setPerformanceCollectionEnabled(enabled);
+        return this.safeCall("setPerformanceCollectionEnabled", [enabled]);
     }
 
     public setCrashlyticsCollectionEnabled(enabled: boolean): Promise<any> {
-        return this.firebase.setCrashlyticsCollectionEnabled(enabled);
+        return this.safeCall("setCrashlyticsCollectionEnabled", [enabled]);
     }
 
     public setScreenName(name: string): Promise<any> {
-        return this.firebase.setScreenName(name);
+        return this.safeCall("setScreenName", [name]);
     }
 
     public startTrace(name: string): Promise<any> {
-        if (this.isDisabled()) return;
-        return this.firebase.startTrace(name);
+        if (this.isDisabled()) return Promise.resolve();
+        return this.safeCall("startTrace", [name]);
     }
 
     public stopTrace(name: string): Promise<any> {
-        if (this.isDisabled()) return;
-        return this.firebase.stopTrace(name);
+        if (this.isDisabled()) return Promise.resolve();
+        return this.safeCall("stopTrace", [name]);
     }
 
     public logError(error: string, stackTrace?: object): Promise<any> {
-        return this.firebase.logError(error, stackTrace);
+        return this.safeCall("logError", [error, stackTrace]);
     }
 
     public logEvent(type: string, data?: any): Promise<any> {
-        return this.firebase.logEvent(type, data ? data : {});
+        return this.safeCall("logEvent", [type, data ? data : {}]);
     }
 
     public unregister(): Promise<any> {
-        return this.firebase.unregister();
+        return this.safeCall("unregister", []);
     }
 
     private isDisabled() {
@@ -65,14 +102,44 @@ export class FirebaseService {
     }
 
     public fetchConfig(): Promise<any> {
-        return this.firebase.fetch();
+        return this.safeCall("fetch", []);
     }
 
     public activateFetchedConfig(): Promise<any> {
-        return this.firebase.activateFetched();
+        return this.safeCall("activateFetched", []);
     }
 
     public getConfigValue(key: string): Promise<any> {
-        return this.firebase.getValue(key) || environment.deviceDefaultConfig[key];
+        if (!this.firebase || typeof this.firebase.getValue !== "function") {
+            return Promise.resolve(
+                environment.deviceDefaultConfig
+                    ? environment.deviceDefaultConfig[key]
+                    : undefined
+            );
+        }
+        return this.firebase.getValue(key).catch(() => {
+            return environment.deviceDefaultConfig
+                ? environment.deviceDefaultConfig[key]
+                : undefined;
+        });
+    }
+
+    private safeCall(method: string, args: any[]): Promise<any> {
+        try {
+            if (!this.firebase || typeof this.firebase[method] !== "function") {
+                return Promise.resolve();
+            }
+            const result = this.firebase[method].apply(this.firebase, args);
+            if (result && typeof result.then === "function") {
+                return result.catch(function (e) {
+                    console.warn("[Firebase] " + method + " failed:", e);
+                    return undefined;
+                });
+            }
+            return Promise.resolve(result);
+        } catch (e) {
+            console.warn("[Firebase] " + method + " threw:", e);
+            return Promise.resolve();
+        }
     }
 }
