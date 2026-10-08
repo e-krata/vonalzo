@@ -32,9 +32,7 @@ export class KretaMfaRequiredException {
         const body = error && error.error ? error.error : {};
         this.mfa_token = body.mfa_token || "";
         this.message =
-            body.error_description ||
-            body.error ||
-            "Kétfaktoros azonosítás szükséges.";
+            body.error_description || body.error || "Kétfaktoros azonosítás szükséges.";
     }
 }
 
@@ -47,13 +45,14 @@ export class ErrorInterceptorService implements HttpInterceptor {
     }
 
     private isTokenUrl(req: HttpRequest<any>): boolean {
-        return req.url.includes("/connect/token") || req.url.includes("/connect/mfa/verify");
+        return req.url.indexOf("/connect/token") !== -1 || req.url.indexOf("/connect/mfa/verify") !== -1;
     }
 
     intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
+        const retryCount = this.isTokenUrl(req) ? 0 : 1;
+
         return next.handle(req).pipe(
-            // Login/MFA ne retry-zzon automatikusan
-            retry(this.isTokenUrl(req) ? 0 : 1),
+            retry(retryCount),
             catchError((error: HttpErrorResponse) => {
                 if (error.status < 0) {
                     return throwError(new NaploNetworkException(error));
@@ -62,35 +61,34 @@ export class ErrorInterceptorService implements HttpInterceptor {
                 const b = this.body(error);
                 const errCode = (b.error || "").toString();
                 const errDesc = (b.error_description || "").toString();
+                const errDescLower = errDesc.toLowerCase();
 
-                // --- Új API: 2FA szükséges (400 vagy 401) ---
+                // Új API: 2FA szükséges
                 if (errCode === "mfa_required" || b.mfa_token) {
                     return throwError(new KretaMfaRequiredException(error));
                 }
 
-                // --- HTTP 400 / connect token ---
+                const bodyStr = req.body ? String(req.body) : "";
+                const isRefreshGrant = bodyStr.indexOf("refresh_token") !== -1;
+
+                // HTTP 400, vagy token URL-en 401
                 if (error.status === 400 || (error.status === 401 && this.isTokenUrl(req))) {
-                    // Hibás jelszó – régi és új API
-                    // Új: { error: "invalid_grant", error_description: "Hibás felhasználónév vagy jelszó." }
-                    // Régi: error_description == "invalid_username_or_password"
                     const badPassword =
                         errDesc === "invalid_username_or_password" ||
-                        errDesc.toLowerCase().indexOf("jelszó") !== -1 ||
-                        errDesc.toLowerCase().indexOf("jelszo") !== -1 ||
-                        errDesc.toLowerCase().indexOf("password") !== -1 ||
-                        errDesc.toLowerCase().indexOf("username") !== -1 ||
-                        (errCode === "invalid_grant" && this.isTokenUrl(req) && !req.body?.toString?.().includes("refresh_token"));
+                        errDescLower.indexOf("jelszó") !== -1 ||
+                        errDescLower.indexOf("jelszo") !== -1 ||
+                        errDescLower.indexOf("password") !== -1 ||
+                        errDescLower.indexOf("username") !== -1 ||
+                        (errCode === "invalid_grant" && this.isTokenUrl(req) && !isRefreshGrant);
 
                     if (badPassword && this.isTokenUrl(req)) {
                         return throwError(new KretaInvalidPasswordException());
                     }
 
-                    // Refresh token grant elbukott
-                    if (errCode === "invalid_grant" && req.body && String(req.body).includes("refresh_token")) {
+                    if (errCode === "invalid_grant" && isRefreshGrant) {
                         return throwError(new KretaInvalidRefreshTokenException(error));
                     }
 
-                    // Egyéb 400 – tartsuk meg az API üzenetet
                     return throwError(new NaploHttpInvalidRequestException(req, error));
                 }
 
@@ -106,7 +104,11 @@ export class ErrorInterceptorService implements HttpInterceptor {
                     return throwError(new NaploHttpInvalidRequestException(req, error));
                 }
 
-                if (error.status === 409 && error.message && error.message.includes("IntezmenyMarTanevetValtott")) {
+                if (
+                    error.status === 409 &&
+                    error.message &&
+                    error.message.indexOf("IntezmenyMarTanevetValtott") !== -1
+                ) {
                     return throwError(new KretaNewSchoolYearException(error));
                 }
 
