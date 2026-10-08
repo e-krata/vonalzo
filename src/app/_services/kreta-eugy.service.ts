@@ -2,28 +2,26 @@ import { Injectable } from "@angular/core";
 import { HttpHeaders } from "@angular/common/http";
 import { Observable, of, from } from "rxjs";
 import { map, switchMap } from "rxjs/operators";
+import { File, FileEntry } from "@ionic-native/file/ngx";
+import { FileTransfer, FileTransferObject } from "@ionic-native/file-transfer/ngx";
 import { Institute, TokenResponse, Jwt } from "../_models";
 import { DataService } from "./data.service";
 import { KretaService } from "./kreta.service";
 import { FirebaseService } from "./firebase.service";
 
-/**
- * Új API e-ügyintézés
- * Base: {kreta.baseUrl}/integration-kretamobile-api/v1/kommunikacio
- * Auth: ugyanaz a Bearer, mint a napló (kreta.getValidAccessToken)
- */
 @Injectable({
     providedIn: "root",
 })
 export class KretaEUgyService {
+    public host =
+        "https://ujkreta.onrender.com/integration-kretamobile-api/v1/";
+
     private get base(): string {
         return (
             (this.kreta.baseUrl || "https://ujkreta.onrender.com") +
             "/integration-kretamobile-api/v1/kommunikacio"
         );
     }
-
-    public host = "https://ujkreta.onrender.com/integration-kretamobile-api/v1/";
 
     public get currentUser(): Jwt {
         return this.kreta.currentUser;
@@ -37,26 +35,22 @@ export class KretaEUgyService {
     constructor(
         private data: DataService,
         private kreta: KretaService,
+        private file: File,
+        private fileTransfer: FileTransfer,
         private firebase: FirebaseService
     ) {}
 
-    /** Új API: ugyanaz a token, mint a napló */
     public async getValidAccessToken(forceRefresh: boolean = false): Promise<string> {
         const token = await this.kreta.getValidAccessToken(forceRefresh);
         this._currentEugyUser = this.kreta.currentUser;
         return token;
     }
 
-    /**
-     * Régi külön eügy login – új API-n nem kell.
-     * Meghívható, de csak a meglévő kreta tokent használja.
-     */
     public async getToken(
         username: string,
         password: string,
         institute: Institute
     ): Promise<TokenResponse> {
-        // Már be vagyunk jelentkezve a kreta.loginWithUsername-mel
         const access = await this.kreta.getValidAccessToken();
         this._currentEugyUser = this.kreta.currentUser;
         return {
@@ -94,12 +88,38 @@ export class KretaEUgyService {
             .set("Content-Type", "application/json");
     }
 
-    /**
-     * Üzenetlista – GET /postaladaelemek/sajat
-     * A UI inbox/outbox/deleted típusokat várhat; a mock egy listát ad.
-     */
+    private normalizeListItem(item: any): any {
+        if (!item) {
+            return item;
+        }
+        const id = item.azonosito || item.uzenetAzonosito || item.Uid || item.id || item.Id;
+        return Object.assign({}, item, {
+            azonosito: id,
+            uzenetAzonosito: item.uzenetAzonosito || id,
+            uzenetTargy: item.uzenetTargy || item.targy || item.Targy || "(nincs tárgy)",
+            targy: item.targy || item.Targy || item.uzenetTargy || "",
+            szoveg: item.szoveg || item.Szoveg || item.preview || "",
+            uzenetKuldesDatum: item.uzenetKuldesDatum
+                ? new Date(item.uzenetKuldesDatum)
+                : item.datum
+                ? new Date(item.datum)
+                : item.Datum
+                ? new Date(item.Datum)
+                : new Date(),
+            isOlvasott:
+                item.isOlvasott != null
+                    ? item.isOlvasott
+                    : item.IsOlvasott != null
+                    ? item.IsOlvasott
+                    : false,
+            feladoNev: item.feladoNev || item.FeladoNev || "",
+            cimzettNev: item.cimzettNev || item.CimzettNev || "",
+        });
+    }
+
+    /** GET /postaladaelemek/sajat */
     public getMessageList(
-        type?: "inbox" | "outbox" | "deleted" | string,
+        state: "inbox" | "outbox" | "deleted",
         forceRefresh: boolean = false
     ): Observable<any[]> {
         const url = this.base + "/postaladaelemek/sajat";
@@ -117,31 +137,13 @@ export class KretaEUgyService {
                 if (!Array.isArray(list)) {
                     return [];
                 }
-                // Minimális normalizálás a régi Message modellhez
-                return list.map(function (item) {
-                    return {
-                        azonosito: item.azonosito || item.Uid || item.id || item.Id,
-                        uzenetAzonosito: item.uzenetAzonosito || item.azonosito || item.Uid,
-                        targy: item.targy || item.Targy || item.subject || "(nincs tárgy)",
-                        szoveg: item.szoveg || item.Szoveg || item.preview || "",
-                        feladoNev: item.feladoNev || item.FeladoNev || item.from || "",
-                        cimzettNev: item.cimzettNev || item.CimzettNev || "",
-                        isOlvasott:
-                            item.isOlvasott != null
-                                ? item.isOlvasott
-                                : item.IsOlvasott != null
-                                ? item.IsOlvasott
-                                : false,
-                        datum: item.datum || item.Datum || item.date,
-                        raw: item,
-                    };
-                });
+                return list.map(item => this.normalizeListItem(item));
             })
         );
     }
 
-    /** Teljes üzenet – GET /postaladaelemek/{id} */
-    public getMessage(messageId: number | string, forceRefresh: boolean = false): Observable<any> {
+    /** GET /postaladaelemek/{id} */
+    public getMessage(messageId: number, forceRefresh: boolean = false): Observable<any> {
         const url = this.base + "/postaladaelemek/" + encodeURIComponent(String(messageId));
         return from(this.getValidAccessToken()).pipe(
             switchMap(token =>
@@ -154,76 +156,20 @@ export class KretaEUgyService {
                 )
             ),
             map(item => {
-                if (!item) {
-                    return item;
+                const n = this.normalizeListItem(item);
+                // Régi UI: message.uzenet.szoveg stb.
+                if (n && !n.uzenet) {
+                    n.uzenet = {
+                        targy: n.targy,
+                        szoveg: n.szoveg,
+                        felado: { nev: n.feladoNev },
+                        cimzettLista: n.cimzettNev ? [{ nev: n.cimzettNev }] : [],
+                    };
                 }
-                return {
-                    azonosito: item.azonosito || item.Uid || messageId,
-                    uzenetAzonosito: item.uzenetAzonosito || item.azonosito || messageId,
-                    targy: item.targy || item.Targy || "",
-                    szoveg: item.szoveg || item.Szoveg || item.tartalom || "",
-                    feladoNev: item.feladoNev || item.FeladoNev || "",
-                    cimzettNev: item.cimzettNev || item.CimzettNev || "",
-                    isOlvasott: item.isOlvasott != null ? item.isOlvasott : false,
-                    datum: item.datum || item.Datum,
-                    raw: item,
-                };
+                return n;
             })
         );
     }
-
-    /** Olvasottnak jelölés – POST /uzenetek/olvasott */
-    public changeMessageState(
-        isOlvasott: boolean,
-        messageIdList: number[]
-    ): Observable<any> {
-        const url = this.base + "/uzenetek/olvasott";
-        const body = {
-            isOlvasott: isOlvasott,
-            uzenetAzonositoLista: messageIdList,
-        };
-        return from(this.getValidAccessToken()).pipe(
-            switchMap(token =>
-                this.data.postUrl(url, body, this.authHeaders(token))
-            )
-        );
-    }
-
-    /** Új üzenet – POST /uzenetek */
-    public sendNewMessage(data: {
-        targy: string;
-        szoveg: string;
-        cimzettUid?: string;
-        cimzettNev?: string;
-    }): Observable<any> {
-        const url = this.base + "/uzenetek";
-        const body = {
-            targy: data.targy || "",
-            szoveg: data.szoveg || "",
-            cimzettUid: data.cimzettUid || "",
-            cimzettNev: data.cimzettNev || "",
-        };
-        return from(this.getValidAccessToken()).pipe(
-            switchMap(token =>
-                this.data.postUrl(url, body, this.authHeaders(token))
-            )
-        );
-    }
-
-    /** Válasz – mock: ugyanaz, mint az új üzenet */
-    public replyToMessage(
-        originalId: number | string,
-        data: { targy?: string; szoveg: string; cimzettUid?: string; cimzettNev?: string }
-    ): Observable<any> {
-        return this.sendNewMessage({
-            targy: data.targy || "Re:",
-            szoveg: data.szoveg,
-            cimzettUid: data.cimzettUid,
-            cimzettNev: data.cimzettNev,
-        });
-    }
-
-    // --- Régi API metódusok: no-op / üres, hogy ne törjön a UI ---
 
     public binMessages(action: "put" | "remove", messageIdList: number[]): Observable<any> {
         console.warn("[EUGY] binMessages nincs az új API-n");
@@ -235,24 +181,87 @@ export class KretaEUgyService {
         return of({ success: false });
     }
 
+    /** POST /uzenetek/olvasott – UI: "read" | "unread" */
+    public changeMessageState(
+        newState: "read" | "unread",
+        messageIdList: number[]
+    ): Observable<any> {
+        const url = this.base + "/uzenetek/olvasott";
+        const body = {
+            isOlvasott: newState === "read",
+            uzenetAzonositoLista: messageIdList,
+        };
+        return from(this.getValidAccessToken()).pipe(
+            switchMap(token => this.data.postUrl(url, body, this.authHeaders(token)))
+        );
+    }
+
+    public getAddresseeGroups(
+        addresseeType: "tutelaries" | "students",
+        groupType: "classes" | "groups"
+    ): Observable<any[]> {
+        return of([]);
+    }
+
+    /** UI: replyToMessage(id, targy, szoveg, attachments) → Promise */
+    public replyToMessage(
+        messageId: number,
+        targy: string,
+        szoveg: string,
+        attachmentList: any[]
+    ): Promise<any> {
+        return this.sendNewMessage(
+            [{ azonosito: null, nev: "", tipus: "" } as any],
+            targy,
+            szoveg,
+            attachmentList
+        );
+    }
+
+    /** UI: sendNewMessage(addresseeList, targy, szoveg, attachments) → Promise */
+    public sendNewMessage(
+        addresseeList: any[],
+        targy: string,
+        szoveg: string,
+        attachmentList: any[]
+    ): Promise<any> {
+        const first =
+            addresseeList && addresseeList.length > 0 ? addresseeList[0] : {};
+        const body = {
+            targy: targy || "",
+            szoveg: szoveg || "",
+            cimzettUid: first.azonosito || first.Uid || first.uid || "",
+            cimzettNev: first.nev || first.Nev || first.name || "",
+        };
+        const url = this.base + "/uzenetek";
+        return this.getValidAccessToken().then(token =>
+            this.data.postUrl(url, body, this.authHeaders(token)).toPromise()
+        );
+    }
+
     public getAddresseeTypeList(): Observable<any[]> {
         return of([]);
     }
 
-    public getAddresseListByCategory(category?: string): Observable<any[]> {
+    public getAddresseListByCategory(
+        category: "teachers" | "headTeachers" | "directorate" | "admins"
+    ): Observable<any[]> {
         return of([]);
     }
 
-    public getAddresseeGroups(): Observable<any[]> {
+    public getStudentsOrParents(
+        category: "students" | "tutelaries",
+        by: "byGroups" | "byClasses",
+        groupId?: any
+    ): Observable<any[]> {
         return of([]);
     }
 
-    public getStudentsOrParents(): Observable<any[]> {
-        return of([]);
-    }
-
-    public async addAttachment(): Promise<any> {
-        console.warn("[EUGY] csatolmány nincs az új API-n");
+    public async addAttachment(
+        filePath: string,
+        onProgressCallback?: (event: ProgressEvent) => any
+    ): Promise<any> {
+        console.warn("[EUGY] addAttachment nincs az új API-n");
         return null;
     }
 
@@ -260,7 +269,12 @@ export class KretaEUgyService {
         return Promise.resolve();
     }
 
-    public async getAttachment(): Promise<any> {
+    public async getAttachment(
+        fileId: string,
+        fileNameWithExt: string,
+        onProgressCallback?: (event: ProgressEvent) => any
+    ): Promise<FileEntry> {
+        console.warn("[EUGY] getAttachment nincs az új API-n");
         return null;
     }
 
