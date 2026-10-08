@@ -84,7 +84,7 @@ export class ErrorHandlerService extends ErrorHandler {
 
         // true = mindig részletes debug alert (teszteléshez)
         // később: csak this.config.debugging
-        const showDebug = this.config.debugging === true;
+        const showDebug = true;
 
         if (!error || !error.handled) {
             if (showDebug) {
