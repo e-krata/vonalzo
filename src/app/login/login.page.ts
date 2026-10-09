@@ -62,12 +62,23 @@ export class LoginPage {
     async ionViewWillEnter() {
         this.unsubscribe$ = new Subject<void>();
         this.config.applyTheme("light", false);
-        this.statusBar.styleDefault();
-        this.statusBar.backgroundColorByHexString("#FDEC5D");
+
+        try {
+            this.statusBar.styleDefault();
+            this.statusBar.backgroundColorByHexString("#FDEC5D");
+        } catch (e) {
+            console.warn("StatusBar unavailable", e);
+        }
+
         this.menuController.enable(false);
 
         this.returnUrl = this.route.snapshot.queryParams["returnUrl"] || "/";
-        this.firebase.setScreenName("login");
+
+        try {
+            this.firebase.setScreenName("login");
+        } catch (e) {
+            console.warn("Firebase setScreenName skipped", e);
+        }
 
         if (await this.kreta.isAuthenticated()) {
             console.log("A login page lett megnyitva, de be vagyunk jelentkezve. Átirányítás...");
@@ -84,7 +95,10 @@ export class LoginPage {
     }
 
     async doLogin() {
-        this.firebase.startTrace("login_time");
+        try {
+            this.firebase.startTrace("login_time");
+        } catch (e) {}
+
         this.loading = true;
         const loading = await this.loadingController.create({
             message: this.translate.instant("login.logging-in"),
@@ -102,7 +116,9 @@ export class LoginPage {
             console.log("Sikeres bejelentkezés, átirányítás: ", this.returnUrl);
 
             this.kreta.deleteInstituteListFromStorage();
-            this.firebase.logEvent("login", { method: "kreta" });
+            try {
+                this.firebase.logEvent("login", { method: "kreta" });
+            } catch (e) {}
 
             await Promise.all([
                 this.menuController.enable(true),
@@ -114,7 +130,6 @@ export class LoginPage {
         } catch (e) {
             console.log("Hiba a bejelentkezés során: ", e);
 
-            // Új API: 2FA szükséges
             if (e && (e.name === "KretaMfaRequiredException" || e.mfa_token)) {
                 await loading.dismiss();
                 this.loading = false;
@@ -124,13 +139,17 @@ export class LoginPage {
             }
 
             if (e instanceof KretaInvalidPasswordException) {
-                this.firebase.logEvent("login_bad_credentials");
+                try {
+                    this.firebase.logEvent("login_bad_credentials");
+                } catch (err) {}
                 await this.errorHelper.presentAlertFromError(e);
                 return;
             }
 
             if (e instanceof KretaMissingRoleException) {
-                this.firebase.logEvent("login_missing_role");
+                try {
+                    this.firebase.logEvent("login_missing_role");
+                } catch (err) {}
                 const alert = await this.alertController.create({
                     header: this.translate.instant("login.permission-needed"),
                     message: this.translate.instant("login.teacher-role-needed"),
@@ -142,7 +161,9 @@ export class LoginPage {
                         {
                             text: this.translate.instant("common.yes"),
                             handler: () => {
-                                this.firebase.logEvent("login_ariszto_opened");
+                                try {
+                                    this.firebase.logEvent("login_ariszto_opened");
+                                } catch (err) {}
                                 this.market.open("hu.coware.ellenorzo");
                             },
                         },
@@ -159,7 +180,9 @@ export class LoginPage {
         } finally {
             loading.dismiss();
             this.loading = false;
-            this.firebase.stopTrace("login_time");
+            try {
+                this.firebase.stopTrace("login_time");
+            } catch (e) {}
         }
     }
 
@@ -199,7 +222,9 @@ export class LoginPage {
                             await this.kreta.loginWithMfa(mfaToken, data.code, true, deviceToken);
 
                             this.kreta.deleteInstituteListFromStorage();
-                            this.firebase.logEvent("login", { method: "kreta_mfa" });
+                            try {
+                                this.firebase.logEvent("login", { method: "kreta_mfa" });
+                            } catch (err) {}
                             await this.menuController.enable(true);
                             await this.config.applyTheme("light");
                             this.router.navigate([this.returnUrl], { replaceUrl: true });
@@ -217,7 +242,10 @@ export class LoginPage {
     }
 
     openPrivacy() {
-        this.firebase.logEvent("login_privacypolicy_opened");
+        try {
+            this.firebase.logEvent("login_privacypolicy_opened");
+        } catch (e) {}
+
         this.safariViewController.isAvailable().then(async (available: boolean) => {
             if (available) {
                 this.safariViewController
@@ -232,13 +260,9 @@ export class LoginPage {
                         next: (result: any) => {},
                         error: (error: any) => {
                             console.error(error);
-                            this.firebase.logError(
-                                "login privacypolicy subscription error: " + error
-                            );
                         },
                     });
             } else {
-                console.log("browser tab not supported");
                 this.iab.create("https://coware-apps.github.io/naplo/privacy", "_blank", {
                     location: "yes",
                     closebuttoncaption: this.translate.instant("common.back"),
@@ -250,6 +274,6 @@ export class LoginPage {
                     footer: "no",
                 });
             }
-        });
+        }).catch(function () {});
     }
 }
