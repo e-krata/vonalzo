@@ -65,7 +65,6 @@ export class ConfigService {
 
     private renderer: Renderer2;
 
-    // https://github.com/ionic-team/ionic/issues/17600
     private _swipeGestureEnabled = true;
     public get swipeGestureEnabled(): boolean {
         return this.platform.is("ios") ? this._swipeGestureEnabled : false;
@@ -88,39 +87,59 @@ export class ConfigService {
     }
 
     public async onInit() {
-        const res = await Promise.all([
-            this.applyTheme(),
-            this.applyLocale(),
-            this.data.getSetting<Institute>("debugging").catch(() => null),
-            this.data.getSetting<Institute>("analytics").catch(() => null),
-            this.data.getSetting<ErtekelesTipus>("defaultErtekelesTipus").catch(() => null),
-        ]);
+        try {
+            const res = await Promise.all([
+                this.applyTheme().catch(function (e) {
+                    console.warn("applyTheme failed", e);
+                }),
+                this.applyLocale().catch(function (e) {
+                    console.warn("applyLocale failed", e);
+                }),
+                this.data.getSetting<boolean>("debugging").catch(function () {
+                    return null;
+                }),
+                this.data.getSetting<boolean>("analytics").catch(function () {
+                    return null;
+                }),
+                this.data.getSetting<ErtekelesTipus>("defaultErtekelesTipus").catch(function () {
+                    return null;
+                }),
+            ]);
 
-        this._debugging = res[2];
-        this._analytics = res[3];
-        this._defaultErtekelesTipus = res[4];
+            this._debugging = res[2] as any;
+            this._analytics = res[3] as any;
+            this._defaultErtekelesTipus = res[4] as any;
 
-        if (!environment.production) {
-            this.firebase.setAnalyticsCollectionEnabled(false);
-            this.firebase.setPerformanceCollectionEnabled(false);
-            this.firebase.setCrashlyticsCollectionEnabled(false);
-            this.firebase.unregister();
-        } else {
-            this.firebase.setAnalyticsCollectionEnabled(this.analytics);
+            if (!environment.production) {
+                try {
+                    this.firebase.setAnalyticsCollectionEnabled(false);
+                    this.firebase.setPerformanceCollectionEnabled(false);
+                    this.firebase.setCrashlyticsCollectionEnabled(false);
+                    this.firebase.unregister();
+                } catch (e) {}
+            } else {
+                try {
+                    this.firebase.setAnalyticsCollectionEnabled(this.analytics);
+                } catch (e) {}
+            }
+
+            try {
+                this.firebase.fetchConfig().then(() =>
+                    this.firebase
+                        .activateFetchedConfig()
+                        .catch(function (error) {
+                            console.warn("Firebase remote config error", error);
+                        })
+                );
+            } catch (e) {}
+        } catch (e) {
+            console.warn("ConfigService.onInit failed (continuing)", e);
         }
-
-        this.firebase
-            .fetchConfig()
-            .then(() =>
-                this.firebase
-                    .activateFetchedConfig()
-                    .catch(error => console.warn("Firebase remote config error", error))
-            );
     }
 
     public async applyTheme(theme?: string, setStatusbar: boolean = true) {
         if (!theme) {
-            theme = await this.data.getSetting<string>("theme").catch(() => {
+            theme = await this.data.getSetting<string>("theme").catch(function () {
                 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
                 return prefersDark.matches ? "dark" : "light";
             });
@@ -129,11 +148,15 @@ export class ConfigService {
         this._theme = theme;
 
         if (setStatusbar) {
-            this.statusBar.styleLightContent();
-            if (theme == "dark") {
-                this.statusBar.backgroundColorByHexString("#000000");
-            } else {
-                this.statusBar.backgroundColorByHexString("#3880ff");
+            try {
+                this.statusBar.styleLightContent();
+                if (theme == "dark") {
+                    this.statusBar.backgroundColorByHexString("#000000");
+                } else {
+                    this.statusBar.backgroundColorByHexString("#3880ff");
+                }
+            } catch (e) {
+                console.warn("StatusBar unavailable in applyTheme", e);
             }
         }
 
@@ -146,22 +169,40 @@ export class ConfigService {
 
     private async applyLocale(locale?: string) {
         if (!locale) {
-            locale = await this.data
-                .getSetting<string>("locale")
-                .catch(async () =>
-                    (await this.globalization.getLocaleName()).value.substring(0, 2)
-                );
+            try {
+                locale = await this.data.getSetting<string>("locale");
+            } catch (_) {
+                locale = null;
+            }
+        }
+
+        if (!locale) {
+            try {
+                const g = await this.globalization.getLocaleName();
+                locale = g && g.value ? g.value.substring(0, 2) : "hu";
+            } catch (e) {
+                console.warn("Globalization unavailable", e);
+                locale = "hu";
+            }
         }
 
         this._locale = locale;
         this.translate.use(locale);
 
-        if (locale == "en") return; // az 'en' már gyárilag be van töltve
+        if (locale == "en") {
+            return;
+        }
 
-        return import(
-            /* webpackInclude: /(hu|de)\.js$/ */
-            `@angular/common/locales/${locale}.js`
-        ).then(module => registerLocaleData(module.default));
+        try {
+            return import(
+                /* webpackInclude: /(hu|de)\.js$/ */
+                `@angular/common/locales/${locale}.js`
+            ).then(function (module) {
+                registerLocaleData(module.default);
+            });
+        } catch (e) {
+            console.warn("Locale import failed", e);
+        }
     }
 
     public getBackButtonText(): string | null {
